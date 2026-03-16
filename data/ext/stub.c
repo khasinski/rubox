@@ -365,6 +365,15 @@ int main(int argc, char **argv) {
 
             if (!extract_ok) {
                 fprintf(stderr, "rubox: extraction failed\n");
+                fprintf(stderr, "\n");
+                fprintf(stderr, "Troubleshooting:\n");
+                fprintf(stderr, "  - Check disk space: df -h %s\n", cache_dir);
+                fprintf(stderr, "  - Ensure gzip is installed: which gzip\n");
+                fprintf(stderr, "  - Try verbose mode: RUBOX_VERBOSE=1 %s\n",
+                        exe_path);
+                fprintf(stderr, "  - Try without cache: RUBOX_NO_CACHE=1 %s\n",
+                        exe_path);
+                fprintf(stderr, "\n");
                 if (is_tmpdir) cleanup_dir(cache_dir);
                 if (lock_fd >= 0) { unlink(lock_path); close(lock_fd); }
                 return 1;
@@ -385,12 +394,14 @@ int main(int argc, char **argv) {
 
     if (access(ruby_bin, R_OK) != 0) {
         fprintf(stderr, "rubox: ruby not found at %s\n", ruby_bin);
+        fprintf(stderr, "The cache may be corrupt. Try: rm -rf %s\n", cache_dir);
         if (is_tmpdir) cleanup_dir(cache_dir);
         return 1;
     }
 
     if (access(entry_script, R_OK) != 0) {
         fprintf(stderr, "rubox: entry.rb not found at %s\n", entry_script);
+        fprintf(stderr, "The binary may have been packaged incorrectly.\n");
         if (is_tmpdir) cleanup_dir(cache_dir);
         return 1;
     }
