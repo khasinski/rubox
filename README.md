@@ -1,5 +1,10 @@
 # rubox
 
+[![Gem Version](https://img.shields.io/gem/v/rubox)](https://rubygems.org/gems/rubox)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.0-red.svg)](https://www.ruby-lang.org)
+[![Platform](https://img.shields.io/badge/platform-macOS%20%7C%20Linux-lightgrey.svg)]()
+
 Package any Ruby app into a single portable binary. Give it a gem name or a Gemfile and get one file you can copy to any machine.
 
 Works on macOS (Intel + Apple Silicon) and Linux (any distro, any architecture).
