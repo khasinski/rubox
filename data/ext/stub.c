@@ -184,26 +184,25 @@ static int extract_payload(const char *exe_path, off_t offset, off_t size,
     char cmd[PATH_MAX * 2 + 256];
 
     /*
-     * Payload is gzip-compressed tar. Try two dd strategies:
-     * 1. GNU dd with iflag=skip_bytes (fast, 64K blocks)
-     * 2. POSIX dd with bs=1 (slow but works on macOS/busybox)
+     * Payload is gzip-compressed tar. Extract with:
+     *   tail -c +<offset+1> <file> | head -c <size> | gzip -d | tar x
+     *
+     * tail/head is fast on all platforms (no bs=1 byte-at-a-time reads).
+     * tail -c +N starts output at byte N (1-indexed).
      */
+    snprintf(cmd, sizeof(cmd),
+        "tail -c +%lld '%s' | head -c %lld | gzip -d -c | tar xf - -C '%s' 2>/dev/null",
+        (long long)(offset + 1), exe_path, (long long)size, dest_dir);
+    LOG("extracting: tail+head+gzip\n");
+    (void)system(cmd);
+    if (verify_extraction(dest_dir) == 0) return 0;
 
-    /* Attempt 1: GNU dd (fast) */
+    /* Fallback: GNU dd (for systems where tail -c doesn't work) */
     snprintf(cmd, sizeof(cmd),
         "dd if='%s' iflag=skip_bytes,count_bytes bs=65536 skip=%lld count=%lld 2>/dev/null | "
         "gzip -d -c | tar xf - -C '%s' 2>/dev/null",
         exe_path, (long long)offset, (long long)size, dest_dir);
-    LOG("trying: fast dd + gzip\n");
-    (void)system(cmd);
-    if (verify_extraction(dest_dir) == 0) return 0;
-
-    /* Attempt 2: POSIX dd (slow, universal) */
-    snprintf(cmd, sizeof(cmd),
-        "dd if='%s' bs=1 skip=%lld count=%lld 2>/dev/null | "
-        "gzip -d -c | tar xf - -C '%s' 2>/dev/null",
-        exe_path, (long long)offset, (long long)size, dest_dir);
-    LOG("trying: slow dd + gzip\n");
+    LOG("fallback: dd+gzip\n");
     (void)system(cmd);
     return verify_extraction(dest_dir);
 }
