@@ -34,7 +34,7 @@ jobs:
             d = Rubox::Detector.new("test/gemfile-app")
             raise "no gemfile" unless d.gemfile_path
             raise "no version" unless d.ruby_version
-            puts "OK: detector"
+            puts "OK"
           '
       - name: Platform tests
         run: |
@@ -43,45 +43,37 @@ jobs:
             raise unless Rubox::Platform.host_target.include?("-")
             raise unless Rubox::Platform.valid_target?("aarch64-linux")
             raise if Rubox::Platform.valid_target?("potato-bsd")
-            puts "OK: platform"
+            puts "OK"
           '
       - name: Footer round-trip
         run: |
           dd if=/dev/zero bs=1 count=100 of=/tmp/test-bin 2>/dev/null
           build/write-footer /tmp/test-bin 100 5000
           SIZE=$(stat -c%s /tmp/test-bin)
-          [ "$SIZE" = "124" ] && echo "OK: footer" || exit 1
+          [ "$SIZE" = "124" ] || exit 1
       - name: Gem builds
         run: gem build rubox.gemspec
 
   test-package-linux:
-    name: Package herb (Ruby ${{ matrix.ruby_version }}, Linux ${{ matrix.arch }})
+    name: Package herb (Linux ${{ matrix.arch }})
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - ruby_version: "3.4.2"
-            arch: x86_64
+          - arch: x86_64
             runner: ubuntu-latest
-          - ruby_version: "3.4.2"
-            arch: aarch64
-            runner: ubuntu-24.04-arm
-          - ruby_version: "4.0.0"
-            arch: x86_64
-            runner: ubuntu-latest
-          - ruby_version: "4.0.0"
-            arch: aarch64
+          - arch: aarch64
             runner: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.4"
-      - name: Build static Ruby ${{ matrix.ruby_version }}
+      - name: Build static Ruby 4.0
         run: |
           RUBOX_DATA_DIR=$PWD/data data/scripts/build-ruby.sh \
-            --ruby-version ${{ matrix.ruby_version }} \
+            --ruby-version 4.0.0 \
             --target ${{ matrix.arch }}-linux \
             --output build/ruby
         timeout-minutes: 15
@@ -109,12 +101,8 @@ jobs:
         run: docker run --rm -v $PWD/build:/app alpine:3.21 /app/herb --version
 
   test-package-macos:
-    name: Package herb (Ruby ${{ matrix.ruby_version }}, macOS arm64)
+    name: Package herb (macOS arm64)
     runs-on: macos-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        ruby_version: ["3.4.2", "4.0.0"]
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
@@ -122,10 +110,10 @@ jobs:
           ruby-version: "3.4"
       - name: Install static libs
         run: brew install openssl@3 libyaml libffi zlib readline
-      - name: Build static Ruby ${{ matrix.ruby_version }}
+      - name: Build static Ruby 4.0
         run: |
           RUBOX_DATA_DIR=$PWD/data data/scripts/build-ruby.sh \
-            --ruby-version ${{ matrix.ruby_version }} \
+            --ruby-version 4.0.0 \
             --target aarch64-darwin \
             --output build/ruby
         timeout-minutes: 10

@@ -22,8 +22,11 @@ is_system_lib() {
     esac
 }
 
-# Collect all .bundle and .dylib files
-mapfile -t TARGETS < <(find "$STAGING_DIR" -type f \( -name "*.bundle" -o -name "*.dylib" \) ! -path "*/DWARF/*")
+# Collect all .bundle and .dylib files (bash 3 compatible, no mapfile)
+TARGETS=()
+while IFS= read -r f; do
+    TARGETS+=("$f")
+done < <(find "$STAGING_DIR" -type f \( -name "*.bundle" -o -name "*.dylib" \) ! -path "*/DWARF/*")
 
 FIXED=0
 ITERATIONS=0
