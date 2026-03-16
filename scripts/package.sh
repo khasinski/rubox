@@ -125,11 +125,20 @@ if [[ "$MODE" == "gemfile" ]]; then
     fi
 else
     echo "==> Gem '${GEM_NAME}' should already be installed in Ruby dir"
-    if ! "${RUBY}" -e "require '${GEM_NAME}'" 2>/dev/null; then
-        echo "    Not found, installing..."
-        "${GEM_CMD}" install "${GEM_NAME}" --no-document 2>&1 | sed 's/^/    /'
+    # Check if gem exists by looking for its directory (works for cross-platform builds)
+    GEM_FOUND=$(find "${RUBY_DIR}/lib/ruby/gems" -maxdepth 3 -type d -name "${GEM_NAME}-*" | head -1)
+    if [[ -z "$GEM_FOUND" ]]; then
+        # Try running gem install (only works for native platform)
+        if "${RUBY}" --version >/dev/null 2>&1; then
+            echo "    Not found, installing..."
+            "${GEM_CMD}" install "${GEM_NAME}" --no-document 2>&1 | sed 's/^/    /'
+        else
+            echo "ERROR: gem '${GEM_NAME}' not found in ${RUBY_DIR} and cannot run gem install (cross-platform build)."
+            echo "       Install the gem first inside Docker using the target Ruby."
+            exit 1
+        fi
     fi
-    echo "    OK: ${GEM_NAME} available"
+    echo "    OK: ${GEM_NAME} found"
 fi
 
 # ===================================================================
@@ -158,7 +167,13 @@ if [[ "$PRUNE_LEVEL" != "none" ]]; then
     find "${STAGING_DIR}/lib/ruby/gems" -name "Makefile" -type f -delete 2>/dev/null || true
 
     # Remove .bundle files for Ruby versions we don't need
-    RUBY_MAJOR_MINOR=$("${RUBY}" -e 'puts RUBY_VERSION.split(".")[0..1].join(".")')
+    # Get Ruby version - try running ruby, fall back to directory inspection
+    if "${RUBY}" --version >/dev/null 2>&1; then
+        RUBY_MAJOR_MINOR=$("${RUBY}" -e 'puts RUBY_VERSION.split(".")[0..1].join(".")')
+    else
+        # Cross-platform: infer from the gems directory name
+        RUBY_MAJOR_MINOR=$(ls -1 "${RUBY_DIR}/lib/ruby/gems/" 2>/dev/null | head -1 | sed 's/\.[0-9]*$//')
+    fi
     echo "    Keeping native extensions for Ruby ${RUBY_MAJOR_MINOR} only"
     # Find versioned .bundle dirs like herb/3.3/, herb/3.4/, etc.
     find "${STAGING_DIR}/lib/ruby/gems" -type d -regex '.*/[0-9]\.[0-9]$' | while read -r ver_dir; do
@@ -225,41 +240,89 @@ echo "    Staged size after pruning: ${STAGED_SIZE}MB"
 # ===================================================================
 # Stage 4: Fix dylib references (macOS)
 # ===================================================================
-if [[ "$(uname -s)" == "Darwin" && "$FIX_DYLIBS" == "yes" ]]; then
-    echo "==> Fixing dylib references..."
+# Determine binary format for platform-specific steps
+BINARY_FORMAT_CHECK=$(file "${STAGING_DIR}/bin/ruby" | grep -o 'ELF' || true)
+
+if [[ "$FIX_DYLIBS" == "yes" && "$BINARY_FORMAT_CHECK" != "ELF" && "$(uname -s)" == "Darwin" ]]; then
+    echo "==> Fixing dylib references (macOS)..."
     "${SCRIPT_DIR}/fix-dylibs.sh" "${STAGING_DIR}"
+fi
+
+# For Linux cross-builds: bundle shared libs via Docker
+if [[ "$BINARY_FORMAT_CHECK" == "ELF" && "$FIX_DYLIBS" != "no" ]]; then
+    echo "==> Bundling Linux shared libraries via Docker..."
+    mkdir -p "${STAGING_DIR}/lib/dylibs"
+
+    # Create a temp container, copy libs out, then remove it
+    CONTAINER_ID=$(docker create alpine:3.21 sh -c '
+        apk add --no-cache yaml-dev openssl-dev zlib-dev libgcc >/dev/null 2>&1
+        mkdir /out
+        for lib in $(ldd /opt/ruby/bin/ruby 2>/dev/null | grep "=>" | awk "{print \$3}"); do
+            bn=$(basename "$lib")
+            case "$bn" in ld-musl-*|ld-linux-*) continue ;; esac
+            [ -f "$lib" ] && cp "$lib" "/out/$bn" && echo "Bundled: $bn"
+        done
+    ')
+    docker cp "${RUBY_DIR}/." "${CONTAINER_ID}:/opt/ruby"
+    docker start -a "${CONTAINER_ID}" 2>&1 | sed 's/^/    /'
+    # Use tar pipe to copy all files (docker cp can be unreliable with wildcards)
+    docker cp "${CONTAINER_ID}:/out" - | tar xf - -C "${STAGING_DIR}/lib/dylibs/" --strip-components=1
+    docker rm "${CONTAINER_ID}" >/dev/null 2>&1
+
+    echo "    Bundled libs:"
+    ls "${STAGING_DIR}/lib/dylibs/" 2>/dev/null | sed 's/^/      /'
 fi
 
 # ===================================================================
 # Stage 5: Verify portability
 # ===================================================================
 echo "==> Verifying portability..."
-PORTABLE=true
 
-# Check the ruby binary
-NON_SYS=$(otool -L "${STAGING_DIR}/bin/ruby" 2>/dev/null | tail -n +2 | grep -v '/usr/lib/' | grep -v '/System/' || true)
-if [[ -n "$NON_SYS" ]]; then
-    echo "    FAIL: bin/ruby has non-portable deps:"
-    echo "$NON_SYS" | sed 's/^/          /'
-    PORTABLE=false
-fi
+# Determine binary format
+BINARY_FORMAT=$(file "${STAGING_DIR}/bin/ruby" | grep -o 'ELF\|Mach-O')
 
-# Check all .bundle/.dylib files
-find "${STAGING_DIR}" -type f \( -name "*.bundle" -o -name "*.dylib" \) ! -path "*/DWARF/*" | while read -r f; do
-    NON_SYS=$(otool -L "$f" 2>/dev/null | tail -n +2 | grep -v '/usr/lib/' | grep -v '/System/' | grep -v '@loader_path' || true)
+if [[ "$BINARY_FORMAT" == "ELF" ]]; then
+    # Linux: check with ldd (if available) or file
+    if command -v ldd &>/dev/null && ldd "${STAGING_DIR}/bin/ruby" 2>&1 | grep -q "statically linked"; then
+        echo "    OK: ruby is statically linked"
+    elif file "${STAGING_DIR}/bin/ruby" | grep -q "statically linked"; then
+        echo "    OK: ruby is statically linked"
+    else
+        echo "    INFO: cannot verify static linking (cross-platform build)"
+    fi
+    # Check .so files for non-system deps
+    find "${STAGING_DIR}" -name "*.so" -type f | while read -r f; do
+        if command -v readelf &>/dev/null; then
+            NEEDED=$(readelf -d "$f" 2>/dev/null | grep NEEDED | grep -v 'libc\.\|libm\.\|libdl\.\|libpthread\.\|librt\.\|ld-linux' || true)
+            if [[ -n "$NEEDED" ]]; then
+                echo "    WARN: ${f#${STAGING_DIR}/} has deps: $NEEDED"
+            fi
+        fi
+    done
+elif [[ "$BINARY_FORMAT" == "Mach-O" ]]; then
+    # macOS: check with otool
+    PORTABLE=true
+    NON_SYS=$(otool -L "${STAGING_DIR}/bin/ruby" 2>/dev/null | tail -n +2 | grep -v '/usr/lib/' | grep -v '/System/' || true)
     if [[ -n "$NON_SYS" ]]; then
-        echo "    FAIL: ${f#${STAGING_DIR}/}"
+        echo "    FAIL: bin/ruby has non-portable deps:"
         echo "$NON_SYS" | sed 's/^/          /'
         PORTABLE=false
     fi
-done
 
-if [[ "$PORTABLE" == "false" ]]; then
-    echo ""
-    echo "WARNING: Non-portable dependencies detected."
-    echo "         The binary may not work on other machines."
-    echo "         Use --no-fix-dylibs to skip auto-fixing, or manually resolve."
-    echo ""
+    find "${STAGING_DIR}" -type f \( -name "*.bundle" -o -name "*.dylib" \) ! -path "*/DWARF/*" | while read -r f; do
+        NON_SYS=$(otool -L "$f" 2>/dev/null | tail -n +2 | grep -v '/usr/lib/' | grep -v '/System/' | grep -v '@loader_path' || true)
+        if [[ -n "$NON_SYS" ]]; then
+            echo "    FAIL: ${f#${STAGING_DIR}/}"
+            echo "$NON_SYS" | sed 's/^/          /'
+            PORTABLE=false
+        fi
+    done
+
+    if [[ "$PORTABLE" == "false" ]]; then
+        echo ""
+        echo "WARNING: Non-portable dependencies detected."
+        echo ""
+    fi
 fi
 
 # ===================================================================
@@ -290,26 +353,71 @@ require File.join(root, "${SETUP_RB_REL}")
 load File.join(root, "bundle", "bin", "${ENTRY_BIN}")
 EOF
 else
-    # Gem mode: use rubygems
-    cat > "${STAGING_DIR}/entry.rb" << EOF
+    # Gem mode: set up load paths manually to avoid rubygems dependency.
+    # Static Ruby builds may not have rubygems loaded by default.
+    cat > "${STAGING_DIR}/entry.rb" << 'ENTRY_EOF'
 # portable-cruby entry (gem mode)
 root = ENV["PORTABLE_CRUBY_ROOT"]
 
 # Cleanup handler for no-cache mode
 if cleanup_dir = ENV["PORTABLE_CRUBY_CLEANUP"]
-  at_exit { require "fileutils"; FileUtils.rm_rf(cleanup_dir) rescue nil }
+  at_exit do
+    require "fileutils"
+    FileUtils.rm_rf(cleanup_dir) rescue nil
+  end
 end
 
-# Point rubygems at our bundled gems
-gem_dir = File.join(root, "lib", "ruby", "gems", "${GEM_VERSION_DIR}")
-ENV["GEM_HOME"] = gem_dir
-ENV["GEM_PATH"] = gem_dir
-Gem.clear_paths
+ENTRY_EOF
 
+    # Build $LOAD_PATH entries from the actual gem directories
+    cat >> "${STAGING_DIR}/entry.rb" << EOF
+# Add Ruby stdlib to load path
+ruby_lib = File.join(root, "lib", "ruby", "${GEM_VERSION_DIR}")
+\$LOAD_PATH.unshift(ruby_lib)
+
+# Add arch-specific stdlib
+Dir.glob(File.join(ruby_lib, "*-*")).each do |arch_dir|
+  \$LOAD_PATH.unshift(arch_dir) if File.directory?(arch_dir)
+end
+
+# Add gem lib directories to load path
+gem_base = File.join(root, "lib", "ruby", "gems", "${GEM_VERSION_DIR}")
+Dir.glob(File.join(gem_base, "gems", "*", "lib")).each do |lib_dir|
+  \$LOAD_PATH.unshift(lib_dir)
+end
+
+# Add native extension directories
+Dir.glob(File.join(gem_base, "extensions", "**", "*.{bundle,so}")).each do |ext|
+  ext_dir = File.dirname(ext)
+  \$LOAD_PATH.unshift(ext_dir) unless \$LOAD_PATH.include?(ext_dir)
+end
+EOF
+
+    # Find the gem's actual exe script and inline its logic
+    GEM_EXE_DIR=$(find "${RUBY_DIR}/lib/ruby/gems" -path "*/gems/${GEM_NAME}-*/exe/${ENTRY_BIN}" -type f | head -1)
+    if [[ -z "$GEM_EXE_DIR" ]]; then
+        GEM_EXE_DIR=$(find "${RUBY_DIR}/lib/ruby/gems" -path "*/gems/${GEM_NAME}-*/bin/${ENTRY_BIN}" -type f | head -1)
+    fi
+
+    if [[ -n "$GEM_EXE_DIR" ]]; then
+        echo "" >> "${STAGING_DIR}/entry.rb"
+        echo "# --- Inlined from $(basename "$GEM_EXE_DIR") ---" >> "${STAGING_DIR}/entry.rb"
+        # Copy the exe, skip shebang and frozen_string_literal
+        grep -v '^#!' "$GEM_EXE_DIR" | grep -v 'frozen_string_literal' | \
+          sed "s|require_relative \"\.\./lib/|require \"|g" >> "${STAGING_DIR}/entry.rb"
+    else
+        # Fallback: try to use rubygems if available
+        cat >> "${STAGING_DIR}/entry.rb" << EOF
+
+# Fallback: load via rubygems
 require 'rubygems'
+ENV["GEM_HOME"] = gem_base
+ENV["GEM_PATH"] = gem_base
+Gem.clear_paths
 gem '${GEM_NAME}'
 load Gem.bin_path('${GEM_NAME}', '${ENTRY_BIN}')
 EOF
+    fi
 fi
 
 echo "    Entry script created (mode: ${MODE})"

@@ -340,6 +340,23 @@ int main(int argc, char **argv) {
 
     putenv("BUNDLE_GEMFILE=");
 
+    /* Set LD_LIBRARY_PATH so bundled .so files are found (Linux) */
+#ifdef __linux__
+    char lib_dir[PATH_MAX];
+    snprintf(lib_dir, sizeof(lib_dir), "%s/lib/dylibs", cache_dir);
+    struct stat st;
+    if (stat(lib_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
+        char ld_env[PATH_MAX * 2 + 32];
+        const char *existing = getenv("LD_LIBRARY_PATH");
+        if (existing && existing[0]) {
+            snprintf(ld_env, sizeof(ld_env), "LD_LIBRARY_PATH=%s:%s", lib_dir, existing);
+        } else {
+            snprintf(ld_env, sizeof(ld_env), "LD_LIBRARY_PATH=%s", lib_dir);
+        }
+        putenv(ld_env);
+    }
+#endif
+
     if (is_tmpdir) {
         char cleanup_env[PATH_MAX + 32];
         snprintf(cleanup_env, sizeof(cleanup_env),
