@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Integration test suite for portable-ruby.
+# Integration test suite for rubox.
 # Run: make test
 #
 set -euo pipefail
@@ -8,7 +8,7 @@ set -euo pipefail
 PROJECT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$PROJECT_DIR"
 
-export PORTABLE_RUBY_DATA_DIR="${PROJECT_DIR}/data"
+export RUBOX_DATA_DIR="${PROJECT_DIR}/data"
 
 PASS=0
 FAIL=0
@@ -47,12 +47,12 @@ echo ""
 echo "=== 2. Ruby CLI ==="
 # ===================================================================
 
-HELP=$(ruby -Ilib exe/portable-ruby --help 2>&1)
-assert_contains "$HELP" "portable-ruby" "cli: help text"
+HELP=$(ruby -Ilib exe/rubox --help 2>&1)
+assert_contains "$HELP" "rubox" "cli: help text"
 assert_contains "$HELP" "\-\-gem" "cli: --gem flag documented"
 assert_contains "$HELP" "\-y" "cli: -y flag documented"
 
-VER=$(ruby -Ilib exe/portable-ruby --version 2>&1)
+VER=$(ruby -Ilib exe/rubox --version 2>&1)
 assert_contains "$VER" "0.1.0" "cli: version output"
 
 # ===================================================================
@@ -62,8 +62,8 @@ echo "=== 3. Detector ==="
 
 # Test Gemfile detection
 DETECT=$(ruby -Ilib -e '
-  require "portable/ruby/detector"
-  d = Portable::Ruby::Detector.new("test/gemfile-app")
+  require "rubox/detector"
+  d = Rubox::Detector.new("test/gemfile-app")
   puts "gemfile:#{d.gemfile_path}"
   puts "version:#{d.ruby_version}"
 ')
@@ -72,8 +72,8 @@ assert_contains "$DETECT" "version:" "detector: returns ruby version"
 
 # Test when no Gemfile
 DETECT_NONE=$(ruby -Ilib -e '
-  require "portable/ruby/detector"
-  d = Portable::Ruby::Detector.new("/tmp")
+  require "rubox/detector"
+  d = Rubox::Detector.new("/tmp")
   puts d.gemfile_path.inspect
 ')
 assert_contains "$DETECT_NONE" "nil" "detector: nil when no Gemfile"
@@ -84,15 +84,15 @@ echo "=== 4. Platform ==="
 # ===================================================================
 
 PLAT=$(ruby -Ilib -e '
-  require "portable/ruby/platform"
-  puts Portable::Ruby::Platform.host_target
+  require "rubox/platform"
+  puts Rubox::Platform.host_target
 ')
 assert_contains "$PLAT" "-" "platform: returns arch-os format"
 
 VALID=$(ruby -Ilib -e '
-  require "portable/ruby/platform"
-  puts Portable::Ruby::Platform.valid_target?("aarch64-linux")
-  puts Portable::Ruby::Platform.valid_target?("potato-bsd")
+  require "rubox/platform"
+  puts Rubox::Platform.valid_target?("aarch64-linux")
+  puts Rubox::Platform.valid_target?("potato-bsd")
 ')
 assert_contains "$VALID" "true" "platform: validates known targets"
 
@@ -103,7 +103,7 @@ echo "=== 5. Confirmation prompt ==="
 
 # Remove any cached ruby to trigger the prompt
 TMPDIR=$(mktemp -d)
-PROMPT_OUT=$(cd "$TMPDIR" && echo "n" | ruby -I"${PROJECT_DIR}/lib" "${PROJECT_DIR}/exe/portable-ruby" pack --gem herb 2>&1 || true)
+PROMPT_OUT=$(cd "$TMPDIR" && echo "n" | ruby -I"${PROJECT_DIR}/lib" "${PROJECT_DIR}/exe/rubox" pack --gem herb 2>&1 || true)
 rm -rf "$TMPDIR"
 assert_contains "$PROMPT_OUT" "fetch and compile" "prompt: shows build message"
 assert_contains "$PROMPT_OUT" "Continue?" "prompt: asks for confirmation"
@@ -121,8 +121,8 @@ if [[ -n "$RUBY_DIR" && -f "$RUBY_DIR/bin/ruby" ]]; then
     find "$RUBY_DIR/lib/ruby/gems" -maxdepth 3 -type d -name "herb-*" | grep -q . || \
         "$RUBY_DIR/bin/gem" install herb --no-document >/dev/null 2>&1
 
-    rm -rf ~/.cache/portable-ruby/
-    PORTABLE_RUBY_DATA_DIR="$PROJECT_DIR/data" \
+    rm -rf ~/.cache/rubox/
+    RUBOX_DATA_DIR="$PROJECT_DIR/data" \
         data/scripts/package.sh --ruby-dir "$RUBY_DIR" --gem herb --entry herb \
         --stub build/stub --output build/test-herb >/dev/null 2>&1
 
@@ -149,8 +149,8 @@ echo "=== 7. macOS packaging (gemfile mode) ==="
 # ===================================================================
 
 if [[ -n "$RUBY_DIR" && -f "$RUBY_DIR/bin/ruby" ]]; then
-    rm -rf ~/.cache/portable-ruby/
-    PORTABLE_RUBY_DATA_DIR="$PROJECT_DIR/data" \
+    rm -rf ~/.cache/rubox/
+    RUBOX_DATA_DIR="$PROJECT_DIR/data" \
         data/scripts/package.sh --ruby-dir "$RUBY_DIR" \
         --gemfile test/gemfile-app/Gemfile --entry herb-app \
         --stub build/stub --output build/test-herb-app >/dev/null 2>&1
@@ -182,8 +182,8 @@ if [[ -n "$LINUX_RUBY" && -f "$LINUX_RUBY/bin/ruby" ]] && command -v docker &>/d
 
     make build/stub-linux >/dev/null 2>&1
 
-    rm -rf ~/.cache/portable-ruby/
-    PORTABLE_RUBY_DATA_DIR="$PROJECT_DIR/data" \
+    rm -rf ~/.cache/rubox/
+    RUBOX_DATA_DIR="$PROJECT_DIR/data" \
         data/scripts/package.sh --ruby-dir "$LINUX_RUBY" --gem herb --entry herb \
         --stub build/stub-linux --output build/test-herb-linux >/dev/null 2>&1
 
@@ -207,16 +207,16 @@ echo "=== 9. Entry script quality ==="
 # ===================================================================
 
 if [[ -n "$RUBY_DIR" && -f "$RUBY_DIR/bin/ruby" ]]; then
-    rm -rf ~/.cache/portable-ruby/
-    PORTABLE_RUBY_DATA_DIR="$PROJECT_DIR/data" \
+    rm -rf ~/.cache/rubox/
+    RUBOX_DATA_DIR="$PROJECT_DIR/data" \
         data/scripts/package.sh --ruby-dir "$RUBY_DIR" --gem herb --entry herb \
         --stub build/stub --output build/test-entry >/dev/null 2>&1
     ./build/test-entry --version >/dev/null 2>&1 || true
 
-    CACHE_DIR=$(ls -d ~/.cache/portable-ruby/*/ 2>/dev/null | head -1)
+    CACHE_DIR=$(ls -d ~/.cache/rubox/*/ 2>/dev/null | head -1)
     if [[ -n "$CACHE_DIR" && -f "$CACHE_DIR/entry.rb" ]]; then
         ENTRY=$(cat "$CACHE_DIR/entry.rb")
-        assert_contains "$ENTRY" "PORTABLE_RUBY_ROOT" "entry.rb: uses ROOT env"
+        assert_contains "$ENTRY" "RUBOX_ROOT" "entry.rb: uses ROOT env"
         assert_contains "$ENTRY" "LOAD_PATH" "entry.rb: sets load path"
         assert_contains "$ENTRY" 'require "herb"' "entry.rb: requires gem"
         if echo "$ENTRY" | grep -q 'require_relative'; then

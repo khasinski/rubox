@@ -1,5 +1,5 @@
 /*
- * write-footer: append the 24-byte portable-ruby footer to a file.
+ * write-footer: append the 24-byte rubox footer to a file.
  * Usage: write-footer <file> <payload_offset> <payload_size>
  */
 #include <stdio.h>

@@ -37,7 +37,7 @@ build/stub-linux: data/ext/stub.c
 stub: $(STUB) build/write-footer ## Compile native tools
 
 $(RUBY_DIR)/bin/ruby:
-	@PORTABLE_RUBY_DATA_DIR=$(PWD)/data \
+	@RUBOX_DATA_DIR=$(PWD)/data \
 		data/scripts/build-ruby.sh \
 		--ruby-version $(RUBY_VERSION) \
 		--target $(TARGET) \
@@ -49,7 +49,7 @@ ruby: $(RUBY_DIR)/bin/ruby ## Build static Ruby
 herb: stub $(RUBY_DIR)/bin/ruby ## Package herb as a test case
 	@$(RUBY_DIR)/bin/gem list -i herb >/dev/null 2>&1 || \
 		$(RUBY_DIR)/bin/gem install herb --no-document
-	@PORTABLE_RUBY_DATA_DIR=$(PWD)/data \
+	@RUBOX_DATA_DIR=$(PWD)/data \
 		data/scripts/package.sh \
 		--ruby-dir $(RUBY_DIR) \
 		--gem herb --entry herb \

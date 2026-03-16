@@ -37,4 +37,4 @@ File.open("Makefile", "w") do |f|
   MAKEFILE
 end
 
-puts "Makefile generated for portable-ruby native tools"
+puts "Makefile generated for rubox native tools"

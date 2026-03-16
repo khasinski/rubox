@@ -44,9 +44,9 @@ if [[ -z "$OUTPUT_DIR" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Support both standalone layout and gem layout (PORTABLE_RUBY_DATA_DIR)
-if [[ -n "${PORTABLE_RUBY_DATA_DIR:-}" ]]; then
-    DATA_DIR="$PORTABLE_RUBY_DATA_DIR"
+# Support both standalone layout and gem layout (RUBOX_DATA_DIR)
+if [[ -n "${RUBOX_DATA_DIR:-}" ]]; then
+    DATA_DIR="$RUBOX_DATA_DIR"
     PROJECT_DIR="$(pwd)"
 else
     DATA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"

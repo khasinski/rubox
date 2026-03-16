@@ -1,3 +1,0 @@
-#!/usr/bin/env ruby
-require "portable/ruby/cli"
-Portable::Ruby::CLI.run(ARGV)

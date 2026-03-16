@@ -1,15 +1,15 @@
-require_relative "lib/portable/ruby/version"
+require_relative "lib/rubox/version"
 
 Gem::Specification.new do |spec|
-  spec.name = "portable-ruby"
-  spec.version = Portable::Ruby::VERSION
+  spec.name = "rubox"
+  spec.version = Rubox::VERSION
   spec.authors = ["Chris Hasinski"]
   spec.email = ["krzysztof.hasinski@gmail.com"]
 
   spec.summary = "Package Ruby apps into single portable binaries"
   spec.description = "Build self-contained, single-file executables from Ruby gems " \
                      "or Gemfile-based apps. Works on macOS and Linux (any distro)."
-  spec.homepage = "https://github.com/khasinski/portable-ruby"
+  spec.homepage = "https://github.com/khasinski/rubox"
   spec.license = "MIT"
 
   spec.required_ruby_version = ">= 3.0.0"
@@ -23,8 +23,8 @@ Gem::Specification.new do |spec|
   ]
 
   spec.bindir = "exe"
-  spec.executables = ["portable-ruby"]
-  spec.extensions = ["ext/portable_ruby/extconf.rb"]
+  spec.executables = ["rubox"]
+  spec.extensions = ["ext/rubox/extconf.rb"]
   spec.require_paths = ["lib"]
 
   spec.metadata["homepage_uri"] = spec.homepage

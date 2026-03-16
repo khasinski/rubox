@@ -54,8 +54,8 @@ if [[ -z "$GEM_NAME" && -z "$GEMFILE" ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [[ -n "${PORTABLE_RUBY_DATA_DIR:-}" ]]; then
-    DATA_DIR="$PORTABLE_RUBY_DATA_DIR"
+if [[ -n "${RUBOX_DATA_DIR:-}" ]]; then
+    DATA_DIR="$RUBOX_DATA_DIR"
     PROJECT_DIR="$(pwd)"
 else
     DATA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -129,7 +129,7 @@ if [[ "$MODE" == "gemfile" ]]; then
         # Bundler's standalone setup.rb has correct per-gem require_paths but
         # uses absolute build-time paths with Ruby interpolations like:
         #   File.expand_path("#{__dir__}/../../../<tmp>/bundle/#{RUBY_ENGINE}/...")
-        # Rewrite to use PORTABLE_RUBY_ROOT, preserving the Ruby interpolations
+        # Rewrite to use RUBOX_ROOT, preserving the Ruby interpolations
         # for RUBY_ENGINE and Gem.ruby_api_version.
         echo "    Rewriting load paths to use runtime root..."
 
@@ -143,7 +143,7 @@ if [[ "$MODE" == "gemfile" ]]; then
           lines = setup.lines
 
           out = []
-          out << %(_root = ENV["PORTABLE_RUBY_ROOT"])
+          out << %(_root = ENV["RUBOX_ROOT"])
           out << %(_bundle = File.join(_root, "#{ARGV[2]}"))
           out << ""
 
@@ -404,11 +404,11 @@ if [[ "$MODE" == "gemfile" ]]; then
     echo "    Entry point: ${ENTRY_PATH}"
 
     cat > "${STAGING_DIR}/entry.rb" << EOF
-# portable-ruby entry (gemfile mode)
-root = ENV["PORTABLE_RUBY_ROOT"]
+# rubox entry (gemfile mode)
+root = ENV["RUBOX_ROOT"]
 
 # Cleanup handler for no-cache mode
-if cleanup_dir = ENV["PORTABLE_RUBY_CLEANUP"]
+if cleanup_dir = ENV["RUBOX_CLEANUP"]
   at_exit { require "fileutils"; FileUtils.rm_rf(cleanup_dir) rescue nil }
 end
 
@@ -426,11 +426,11 @@ else
     # Gem mode: set up load paths manually to avoid rubygems dependency.
     # Static Ruby builds may not have rubygems loaded by default.
     cat > "${STAGING_DIR}/entry.rb" << 'ENTRY_EOF'
-# portable-ruby entry (gem mode)
-root = ENV["PORTABLE_RUBY_ROOT"]
+# rubox entry (gem mode)
+root = ENV["RUBOX_ROOT"]
 
 # Cleanup handler for no-cache mode
-if cleanup_dir = ENV["PORTABLE_RUBY_CLEANUP"]
+if cleanup_dir = ENV["RUBOX_CLEANUP"]
   at_exit do
     require "fileutils"
     FileUtils.rm_rf(cleanup_dir) rescue nil

@@ -1,0 +1,3 @@
+#!/usr/bin/env ruby
+require "rubox/cli"
+Rubox::CLI.run(ARGV)
