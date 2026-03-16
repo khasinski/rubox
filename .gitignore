@@ -1,0 +1,4 @@
+build/
+vendor/
+packaging/
+*.gem

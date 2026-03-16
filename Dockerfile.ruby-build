@@ -1,0 +1,74 @@
+# syntax=docker/dockerfile:1
+#
+# Builds a static CRuby on Alpine Linux (musl).
+# The output is a minimal Ruby installation suitable for embedding.
+#
+ARG RUBY_VERSION=4.0.0
+ARG JOBS=4
+
+FROM alpine:3.21 AS builder
+
+ARG RUBY_VERSION
+ARG JOBS
+
+# Install build dependencies
+RUN apk add --no-cache \
+    build-base \
+    linux-headers \
+    openssl-dev \
+    openssl-libs-static \
+    zlib-dev \
+    zlib-static \
+    yaml-dev \
+    yaml-static \
+    libffi-dev \
+    readline-dev \
+    readline-static \
+    ncurses-dev \
+    ncurses-static \
+    gdbm-dev \
+    curl \
+    autoconf \
+    bison \
+    rust \
+    cargo
+
+# Download and extract Ruby source
+WORKDIR /build
+RUN set -ex && \
+    MAJOR_MINOR=$(echo "$RUBY_VERSION" | sed 's/\.[^.]*$//') && \
+    curl -fSL "https://cache.ruby-lang.org/pub/ruby/${MAJOR_MINOR}/ruby-${RUBY_VERSION}.tar.gz" \
+        -o ruby.tar.gz && \
+    tar xzf ruby.tar.gz && \
+    rm ruby.tar.gz
+
+WORKDIR /build/ruby-${RUBY_VERSION}
+
+# Configure for static build
+RUN ./configure \
+    --prefix=/opt/ruby \
+    --disable-shared \
+    --enable-static \
+    --disable-install-doc \
+    --disable-install-rdoc \
+    --disable-install-capi \
+    --with-static-linked-ext \
+    --without-gmp \
+    --enable-yjit \
+    LDFLAGS="-static -L/usr/lib" \
+    CFLAGS="-O2 -fPIC"
+
+# Build
+RUN make -j${JOBS}
+RUN make install
+
+# Strip the binary
+RUN strip /opt/ruby/bin/ruby
+
+# Verify it's static (on musl)
+RUN file /opt/ruby/bin/ruby && \
+    /opt/ruby/bin/ruby --version
+
+# Second stage: just output the built ruby
+FROM scratch AS output
+COPY --from=builder /opt/ruby /
