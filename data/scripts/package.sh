@@ -126,39 +126,45 @@ if [[ "$MODE" == "gemfile" ]]; then
     SETUP_RB=$(find "$BUNDLE_DIR" -name "setup.rb" -path "*/bundler/*" | head -1)
     if [[ -n "$SETUP_RB" ]]; then
         echo "    OK: standalone setup.rb found"
-        # Rewrite the hardcoded $:.unshift paths to be relative to the bundle dir.
-        # The standalone setup.rb generates paths like:
-        #   $:.unshift File.expand_path("#{__dir__}/../../.../gems/foo/lib")
-        # which resolve to absolute build-time paths. Replace with runtime-relative paths.
-        BUNDLE_GEMS_DIR=$(find "$BUNDLE_DIR" -type d -name "gems" | head -1)
-        if [[ -n "$BUNDLE_GEMS_DIR" ]]; then
-            BUNDLE_GEMS_REL="${BUNDLE_GEMS_DIR#${STAGING_DIR}/}"
-            echo "    Rewriting load paths to use runtime root..."
+        # Bundler's standalone setup.rb has correct per-gem require_paths but
+        # uses absolute build-time paths with Ruby interpolations like:
+        #   File.expand_path("#{__dir__}/../../../<tmp>/bundle/#{RUBY_ENGINE}/...")
+        # Rewrite to use PORTABLE_RUBY_ROOT, preserving the Ruby interpolations
+        # for RUBY_ENGINE and Gem.ruby_api_version.
+        echo "    Rewriting load paths to use runtime root..."
 
-            # Generate a new setup.rb that uses PORTABLE_RUBY_ROOT
-            SETUP_HEADER='require "rbconfig"
-module Kernel
-  remove_method(:gem) if private_method_defined?(:gem)
-  def gem(*); end
-  private :gem
-end
-'
-            {
-                echo "$SETUP_HEADER"
-                echo '_root = ENV["PORTABLE_RUBY_ROOT"]'
-                # Find all gem lib dirs and extension dirs
-                find "$BUNDLE_GEMS_DIR" -maxdepth 2 -name "lib" -type d | while read -r lib_dir; do
-                    rel="${lib_dir#${STAGING_DIR}/}"
-                    echo "\$:.unshift File.join(_root, \"${rel}\")"
-                done
-                # Find native extension dirs
-                find "$BUNDLE_DIR" -name "*.bundle" -o -name "*.so" 2>/dev/null | while read -r ext; do
-                    ext_dir=$(dirname "$ext")
-                    rel="${ext_dir#${STAGING_DIR}/}"
-                    echo "\$:.unshift File.join(_root, \"${rel}\")"
-                done
-            } > "$SETUP_RB"
-        fi
+        # Find the bundle directory name inside staging (could be "bundle" or "vendor")
+        BUNDLE_SUBDIR=$(basename "$BUNDLE_DIR")
+
+        # Use Ruby to rewrite the setup.rb -- handles the path parsing cleanly
+        "${RUBY}" -e '
+          root_marker = ARGV[0]  # e.g. "/tmp/.../bundle"
+          setup = File.read(ARGV[1])
+          lines = setup.lines
+
+          out = []
+          out << %(_root = ENV["PORTABLE_RUBY_ROOT"])
+          out << %(_bundle = File.join(_root, "#{ARGV[2]}"))
+          out << ""
+
+          lines.each do |line|
+            if line.start_with?("$:.unshift")
+              # Replace the File.expand_path("#{__dir__}/../../..<abs_path>/bundle/...")
+              # with File.join(_bundle, "...")
+              # The path after the bundle dir looks like: #{RUBY_ENGINE}/#{Gem...}/gems/foo/lib
+              if line.include?(root_marker)
+                suffix = line.split(root_marker, 2).last
+                # Clean up: remove leading /, trailing quote/paren/newline
+                suffix = suffix.sub(/^\//, "").sub(/[")\s]+$/, "")
+                out << %($:.unshift File.join(_bundle, "#{suffix}"))
+              end
+            elsif !line.include?("$:.unshift")
+              out << line.rstrip
+            end
+          end
+
+          File.write(ARGV[1], out.join("\n") + "\n")
+        ' "$BUNDLE_DIR" "$SETUP_RB" "$BUNDLE_SUBDIR" 2>&1 | sed 's/^/    /'
     else
         echo "    WARNING: standalone setup.rb not found, gems may not load correctly"
     fi
