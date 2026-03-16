@@ -1,5 +1,6 @@
 # rubox
 
+[![CI](https://github.com/khasinski/rubox/actions/workflows/ci.yml/badge.svg)](https://github.com/khasinski/rubox/actions/workflows/ci.yml)
 [![Gem Version](https://img.shields.io/gem/v/rubox)](https://rubygems.org/gems/rubox)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Ruby](https://img.shields.io/badge/ruby-%3E%3D%203.0-red.svg)](https://www.ruby-lang.org)
