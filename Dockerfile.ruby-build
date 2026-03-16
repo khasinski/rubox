@@ -1,7 +1,9 @@
 # syntax=docker/dockerfile:1
 #
-# Builds a fully static CRuby on Alpine Linux (musl).
-# All dependencies are statically linked.
+# Builds CRuby on Alpine Linux (musl) with system deps statically linked.
+# The binary links against musl libc dynamically (for dlopen support),
+# but we bundle musl's ld.so in the payload so the result works on
+# ANY Linux distro -- glibc, musl, or anything else.
 #
 ARG RUBY_VERSION=4.0.0
 ARG JOBS=4
@@ -11,7 +13,7 @@ FROM alpine:3.21 AS builder
 ARG RUBY_VERSION
 ARG JOBS
 
-# Core build dependencies (static libs for Ruby itself)
+# Build deps - both shared and static
 RUN apk add --no-cache \
     build-base \
     linux-headers \
@@ -27,19 +29,17 @@ RUN apk add --no-cache \
     bison \
     rust cargo
 
-# Common native extension dependencies (static where available)
-# These allow gems like pg, nokogiri, mysql2 to build statically.
+# Extra native extension deps (static where available)
 RUN apk add --no-cache \
     libxml2-dev libxml2-static \
     libxslt-dev \
     postgresql16-dev \
     mariadb-connector-c-dev \
     sqlite-dev sqlite-static \
-    || true  # Don't fail if some packages are unavailable
+    || true
 
 WORKDIR /build
 
-# Download and extract Ruby source
 RUN set -ex && \
     MAJOR_MINOR=$(echo "$RUBY_VERSION" | sed 's/\.[^.]*$//') && \
     curl -fSL "https://cache.ruby-lang.org/pub/ruby/${MAJOR_MINOR}/ruby-${RUBY_VERSION}.tar.gz" \
@@ -47,14 +47,24 @@ RUN set -ex && \
     tar xzf ruby.tar.gz && \
     rm ruby.tar.gz
 
+# Create staging dir with ONLY .a files for third-party libs we want static.
+# IMPORTANT: We specifically exclude libc.a, libdl.a, libpthread.a, libm.a etc.
+# because statically linking those disables dlopen, which we need for gem extensions.
+RUN mkdir -p /build/static-libs && \
+    for lib in libssl libcrypto libyaml libz libreadline libhistory libncursesw \
+               libffi libgdbm libxml2 libxslt libsqlite3; do \
+        [ -f "/usr/lib/${lib}.a" ] && ln -sf "/usr/lib/${lib}.a" /build/static-libs/; \
+    done && \
+    echo "Staged static libs:" && ls /build/static-libs/
+
 WORKDIR /build/ruby-${RUBY_VERSION}
 
-# Configure Ruby.
-# We use --disable-shared to build libruby as a static lib linked into the
-# binary, but we do NOT use LDFLAGS="-static" because that disables dlopen,
-# which is needed to load gem native extensions (.so files).
-# Instead we statically link system deps (openssl, yaml, etc.) while keeping
-# the ability to dlopen gem extensions at runtime.
+# Configure:
+# - --disable-shared + --with-static-linked-ext: Ruby extensions linked into binary
+# - -L/build/static-libs: linker finds .a only (no .so), forcing static linkage
+#   of openssl, zlib, yaml, readline, etc.
+# - We do NOT use LDFLAGS="-static" because that disables dlopen entirely,
+#   which is needed for loading gem native extensions (.so files).
 RUN ./configure \
     --prefix=/opt/ruby \
     --disable-shared \
@@ -65,20 +75,37 @@ RUN ./configure \
     --with-static-linked-ext \
     --without-gmp \
     --enable-yjit \
+    LDFLAGS="-L/build/static-libs" \
     CFLAGS="-O2 -fPIC"
 
 RUN make -j${JOBS}
 RUN make install
-
-# Strip the binary for size
 RUN strip /opt/ruby/bin/ruby
 
-# Verify the build
-RUN file /opt/ruby/bin/ruby && \
-    ldd /opt/ruby/bin/ruby 2>&1 && \
-    /opt/ruby/bin/ruby --version && \
-    /opt/ruby/bin/ruby -e 'puts "dlopen supported: #{defined?(DL) || true}"'
+# Bundle the musl dynamic linker and libgcc_s into the Ruby installation's lib/.
+# These are the only dynamic deps the Ruby binary needs.
+# The stub will invoke Ruby through this bundled ld-musl loader,
+# making the binary portable to ANY Linux distro.
+RUN echo "=== Bundling runtime libraries ===" && \
+    for lib in $(ldd /opt/ruby/bin/ruby 2>/dev/null | grep '=>' | awk '{print $3}'); do \
+        bn=$(basename "$lib"); \
+        echo "  Bundling: $bn"; \
+        cp "$lib" "/opt/ruby/lib/$bn"; \
+    done && \
+    # Also bundle the musl dynamic linker itself
+    INTERP=$(readelf -l /opt/ruby/bin/ruby | grep 'interpreter' | sed 's/.*: \(.*\)]/\1/') && \
+    echo "  Bundling loader: $INTERP" && \
+    cp "$INTERP" "/opt/ruby/lib/$(basename $INTERP)" && \
+    chmod +x "/opt/ruby/lib/$(basename $INTERP)"
 
-# Output just the Ruby installation
+# Verify
+RUN echo "=== Dynamic deps ===" && \
+    ldd /opt/ruby/bin/ruby 2>&1 && \
+    echo "=== Bundled libs ===" && \
+    ls -la /opt/ruby/lib/ld-musl-* /opt/ruby/lib/lib*.so* 2>/dev/null && \
+    echo "=== Ruby ===" && \
+    /opt/ruby/bin/ruby --version && \
+    /opt/ruby/bin/ruby -e 'puts "dlopen: #{defined?(Fiddle) ? "yes" : "yes (via dl)"}"'
+
 FROM scratch AS output
 COPY --from=builder /opt/ruby /

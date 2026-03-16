@@ -84,6 +84,11 @@ chmod +x "${STAGING_DIR}/bin/ruby"
 mkdir -p "${STAGING_DIR}/lib"
 cp -a "${RUBY_DIR}/lib/ruby" "${STAGING_DIR}/lib/ruby"
 
+# Copy top-level shared libs (bundled musl loader, libgcc_s, etc.)
+for f in "${RUBY_DIR}"/lib/*.so* "${RUBY_DIR}"/lib/ld-*; do
+    [[ -f "$f" ]] && cp -a "$f" "${STAGING_DIR}/lib/"
+done
+
 # ===================================================================
 # Stage 2: Install gems (gem mode) or bundle (gemfile mode)
 # ===================================================================
@@ -248,29 +253,22 @@ if [[ "$FIX_DYLIBS" == "yes" && "$BINARY_FORMAT_CHECK" != "ELF" && "$(uname -s)"
     "${SCRIPT_DIR}/fix-dylibs.sh" "${STAGING_DIR}"
 fi
 
-# For Linux cross-builds: bundle shared libs via Docker
-if [[ "$BINARY_FORMAT_CHECK" == "ELF" && "$FIX_DYLIBS" != "no" ]]; then
-    echo "==> Bundling Linux shared libraries via Docker..."
-    mkdir -p "${STAGING_DIR}/lib/dylibs"
-
-    # Create a temp container, copy libs out, then remove it
-    CONTAINER_ID=$(docker create alpine:3.21 sh -c '
-        apk add --no-cache yaml-dev openssl-dev zlib-dev libgcc >/dev/null 2>&1
-        mkdir /out
-        for lib in $(ldd /opt/ruby/bin/ruby 2>/dev/null | grep "=>" | awk "{print \$3}"); do
-            bn=$(basename "$lib")
-            case "$bn" in ld-musl-*|ld-linux-*) continue ;; esac
-            [ -f "$lib" ] && cp "$lib" "/out/$bn" && echo "Bundled: $bn"
+# For Linux: verify the bundled loader and runtime libs are present.
+# These are baked into the Ruby installation by the Dockerfile at build time.
+if [[ "$BINARY_FORMAT_CHECK" == "ELF" ]]; then
+    LOADER=$(find "${STAGING_DIR}/lib" -name "ld-musl-*" -type f 2>/dev/null | head -1)
+    if [[ -n "$LOADER" ]]; then
+        chmod +x "$LOADER"
+        echo "    Bundled musl loader: $(basename "$LOADER")"
+        # List all bundled .so files
+        find "${STAGING_DIR}/lib" -maxdepth 1 -name "*.so*" -type f | while read -r f; do
+            echo "    Bundled lib: $(basename "$f")"
         done
-    ')
-    docker cp "${RUBY_DIR}/." "${CONTAINER_ID}:/opt/ruby"
-    docker start -a "${CONTAINER_ID}" 2>&1 | sed 's/^/    /'
-    # Use tar pipe to copy all files (docker cp can be unreliable with wildcards)
-    docker cp "${CONTAINER_ID}:/out" - | tar xf - -C "${STAGING_DIR}/lib/dylibs/" --strip-components=1
-    docker rm "${CONTAINER_ID}" >/dev/null 2>&1
-
-    echo "    Bundled libs:"
-    ls "${STAGING_DIR}/lib/dylibs/" 2>/dev/null | sed 's/^/      /'
+    else
+        echo "    WARNING: No bundled musl loader found in lib/"
+        echo "             The binary may not work on non-musl Linux systems."
+        echo "             Rebuild Ruby with the Dockerfile to bundle the loader."
+    fi
 fi
 
 # ===================================================================

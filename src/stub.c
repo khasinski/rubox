@@ -11,15 +11,19 @@
  *   5. If not cached, extracts payload there
  *   6. Execs the bundled Ruby interpreter with the entry script
  *
+ * On Linux, Ruby is exec'd through the bundled musl dynamic linker
+ * (lib/ld-musl-*.so.1) so the binary works on ANY Linux distro
+ * regardless of the host's libc (glibc, musl, etc).
+ *
  * Footer layout (last 24 bytes of the binary):
  *   [8 bytes] payload offset (little-endian uint64)
  *   [8 bytes] payload size   (little-endian uint64)
  *   [8 bytes] magic          "CRUBY\x00\x01\x00"
  *
  * Env vars:
- *   PORTABLE_CRUBY_CACHE    Override cache directory (skip auto ~/.cache)
- *   PORTABLE_CRUBY_NO_CACHE Set to 1 to extract to tmpdir and clean up on exit
- *   PORTABLE_CRUBY_VERBOSE  Set to 1 for extraction progress messages
+ *   PORTABLE_CRUBY_CACHE    Override cache directory
+ *   PORTABLE_CRUBY_NO_CACHE Set to 1 to extract to tmpdir with cleanup
+ *   PORTABLE_CRUBY_VERBOSE  Set to 1 for debug messages
  */
 
 #define _GNU_SOURCE
@@ -33,6 +37,8 @@
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
+#include <dirent.h>
+#include <glob.h>
 
 #ifdef __linux__
 #include <sys/syscall.h>
@@ -62,7 +68,6 @@ static int self_exe_path(char *buf, size_t bufsize) {
 #ifdef __APPLE__
     uint32_t size = (uint32_t)bufsize;
     if (_NSGetExecutablePath(buf, &size) == 0) {
-        /* Resolve symlinks */
         char resolved[PATH_MAX];
         if (realpath(buf, resolved)) {
             strncpy(buf, resolved, bufsize - 1);
@@ -74,7 +79,6 @@ static int self_exe_path(char *buf, size_t bufsize) {
     return -1;
 }
 
-/* mkdir -p (create all parent directories) */
 static int mkdirp(const char *path, mode_t mode) {
     char tmp[PATH_MAX];
     char *p = NULL;
@@ -113,7 +117,6 @@ static void cleanup_dir(const char *path) {
     (void)system(cmd);
 }
 
-/* Build the cache directory path from a cache key */
 static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
     const char *override = getenv("PORTABLE_CRUBY_CACHE");
     if (override && override[0]) {
@@ -131,20 +134,12 @@ static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
     }
 }
 
-/* Check if extraction produced a valid Ruby install */
 static int verify_extraction(const char *dest_dir) {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/bin/ruby", dest_dir);
     return access(path, X_OK);
 }
 
-/* Extract a zstd-compressed tar from a region of a file.
- *
- * We use dd to slice the payload bytes, pipe through decompression,
- * then untar. We try multiple dd invocations because macOS dd
- * does not support iflag=skip_bytes. We verify that extraction
- * actually produced files since pipeline exit codes can be unreliable.
- */
 static int extract_payload(const char *exe_path, off_t offset, off_t size,
                            const char *dest_dir) {
     char cmd[PATH_MAX * 2 + 256];
@@ -190,6 +185,28 @@ static uint64_t read_le64(const unsigned char *p) {
          | (uint64_t)p[6] << 48
          | (uint64_t)p[7] << 56;
 }
+
+#ifdef __linux__
+/*
+ * Find the bundled musl dynamic linker.
+ * It's at <cache_dir>/lib/ld-musl-<arch>.so.1
+ * Returns 0 on success and fills loader_path.
+ */
+static int find_musl_loader(const char *cache_dir, char *loader_path, size_t bufsize) {
+    char pattern[PATH_MAX];
+    snprintf(pattern, sizeof(pattern), "%s/lib/ld-musl-*.so.1", cache_dir);
+
+    glob_t g;
+    int ret = glob(pattern, 0, NULL, &g);
+    if (ret == 0 && g.gl_pathc > 0) {
+        snprintf(loader_path, bufsize, "%s", g.gl_pathv[0]);
+        globfree(&g);
+        return 0;
+    }
+    if (ret != GLOB_NOMATCH) globfree(&g);
+    return -1;
+}
+#endif
 
 int main(int argc, char **argv) {
     char exe_path[PATH_MAX];
@@ -243,8 +260,6 @@ int main(int argc, char **argv) {
     uint64_t payload_offset = read_le64(footer);
     uint64_t payload_size = read_le64(footer + 8);
 
-    /* Derive content-addressed cache key from offset+size.
-     * This changes on every rebuild since the payload size changes. */
     char cache_key[33];
     snprintf(cache_key, sizeof(cache_key), "%08llx%08llx",
              (unsigned long long)payload_offset,
@@ -255,15 +270,13 @@ int main(int argc, char **argv) {
         (unsigned long long)payload_size, cache_key);
 
     int needs_extract = 1;
-    int is_tmpdir = 0; /* 1 = tmpdir that needs cleanup */
+    int is_tmpdir = 0;
 
     if (no_cache) {
-        /* Extract to tmpdir, clean up on exit */
         if (make_tmpdir(cache_dir, sizeof(cache_dir)) != 0) return 1;
         is_tmpdir = 1;
         LOG("no-cache mode, extracting to %s\n", cache_dir);
     } else {
-        /* Use content-addressed cache */
         build_cache_path(cache_dir, sizeof(cache_dir), cache_key);
         snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", cache_dir);
 
@@ -277,12 +290,10 @@ int main(int argc, char **argv) {
     }
 
     if (needs_extract) {
-        /* Use a lock file to prevent concurrent extractions */
         snprintf(lock_path, sizeof(lock_path), "%s.lock", cache_dir);
         int lock_fd = open(lock_path, O_CREAT | O_WRONLY, 0644);
         if (lock_fd >= 0) {
             if (flock(lock_fd, LOCK_EX) == 0) {
-                /* Re-check after acquiring lock (another process may have extracted) */
                 snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", cache_dir);
                 if (access(ruby_bin, X_OK) == 0) {
                     needs_extract = 0;
@@ -325,14 +336,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    /* Build argv: ruby entry.rb [original args...] */
-    char **new_argv = malloc(sizeof(char *) * (argc + 2));
-    if (!new_argv) {
-        perror("malloc");
-        if (is_tmpdir) cleanup_dir(cache_dir);
-        return 1;
-    }
-
     /* Set environment */
     char root_env[PATH_MAX + 32];
     snprintf(root_env, sizeof(root_env), "PORTABLE_CRUBY_ROOT=%s", cache_dir);
@@ -340,28 +343,64 @@ int main(int argc, char **argv) {
 
     putenv("BUNDLE_GEMFILE=");
 
-    /* Set LD_LIBRARY_PATH so bundled .so files are found (Linux) */
-#ifdef __linux__
-    char lib_dir[PATH_MAX];
-    snprintf(lib_dir, sizeof(lib_dir), "%s/lib/dylibs", cache_dir);
-    struct stat st;
-    if (stat(lib_dir, &st) == 0 && S_ISDIR(st.st_mode)) {
-        char ld_env[PATH_MAX * 2 + 32];
-        const char *existing = getenv("LD_LIBRARY_PATH");
-        if (existing && existing[0]) {
-            snprintf(ld_env, sizeof(ld_env), "LD_LIBRARY_PATH=%s:%s", lib_dir, existing);
-        } else {
-            snprintf(ld_env, sizeof(ld_env), "LD_LIBRARY_PATH=%s", lib_dir);
-        }
-        putenv(ld_env);
-    }
-#endif
-
     if (is_tmpdir) {
         char cleanup_env[PATH_MAX + 32];
         snprintf(cleanup_env, sizeof(cleanup_env),
                  "PORTABLE_CRUBY_CLEANUP=%s", cache_dir);
         putenv(cleanup_env);
+    }
+
+    /*
+     * On Linux we exec Ruby through the bundled musl dynamic linker.
+     * This makes the binary work on ANY Linux distro (glibc, musl, etc.)
+     * because we carry our own libc.
+     *
+     * The invocation is:
+     *   /path/to/ld-musl-<arch>.so.1 --library-path /path/to/lib \
+     *       /path/to/ruby entry.rb [args...]
+     *
+     * On macOS we exec Ruby directly (system dyld handles everything).
+     */
+
+#ifdef __linux__
+    char loader_path[PATH_MAX];
+    char lib_path[PATH_MAX];
+
+    if (find_musl_loader(cache_dir, loader_path, sizeof(loader_path)) == 0) {
+        snprintf(lib_path, sizeof(lib_path), "%s/lib", cache_dir);
+        LOG("using bundled loader: %s\n", loader_path);
+        LOG("library path: %s\n", lib_path);
+
+        /* argv: loader --library-path <lib> ruby entry.rb [user args...] */
+        int new_argc = argc + 5;
+        char **new_argv = malloc(sizeof(char *) * (new_argc + 1));
+        if (!new_argv) { perror("malloc"); return 1; }
+
+        new_argv[0] = loader_path;
+        new_argv[1] = "--library-path";
+        new_argv[2] = lib_path;
+        new_argv[3] = ruby_bin;
+        new_argv[4] = entry_script;
+        for (int i = 1; i < argc; i++) {
+            new_argv[i + 4] = argv[i];
+        }
+        new_argv[argc + 4] = NULL;
+
+        execv(loader_path, new_argv);
+        fprintf(stderr, "portable-cruby: exec loader failed: %s\n", strerror(errno));
+        free(new_argv);
+        /* Fall through to direct exec as fallback */
+    } else {
+        LOG("no bundled loader found, exec'ing ruby directly\n");
+    }
+#endif
+
+    /* Direct exec (macOS, or Linux fallback if no bundled loader) */
+    char **new_argv = malloc(sizeof(char *) * (argc + 2));
+    if (!new_argv) {
+        perror("malloc");
+        if (is_tmpdir) cleanup_dir(cache_dir);
+        return 1;
     }
 
     new_argv[0] = ruby_bin;
