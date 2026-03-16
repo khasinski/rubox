@@ -124,6 +124,43 @@ static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
         return;
     }
 
+#ifdef __linux__
+    /*
+     * On Linux, prefer /dev/shm (tmpfs / shared memory) for the cache.
+     * This is RAM-backed on virtually all Linux systems, so extraction
+     * and subsequent loads happen entirely in memory with no disk I/O.
+     * Skip if /dev/shm is mounted noexec (common in Docker) since we
+     * need to exec the loader and mmap Ruby's binary with PROT_EXEC.
+     */
+    struct stat shm_st;
+    if (stat("/dev/shm", &shm_st) == 0 && S_ISDIR(shm_st.st_mode) &&
+        access("/dev/shm", W_OK) == 0) {
+        /* Check for noexec by trying to create and exec a tiny script */
+        int shm_exec_ok = 0;
+        char test_path[] = "/dev/shm/.portable-cruby-exec-test";
+        int tfd = open(test_path, O_CREAT | O_WRONLY | O_TRUNC, 0755);
+        if (tfd >= 0) {
+            const char *script = "#!/bin/sh\nexit 0\n";
+            if (write(tfd, script, strlen(script)) > 0) {
+                close(tfd);
+                char test_cmd[PATH_MAX + 32];
+                snprintf(test_cmd, sizeof(test_cmd), "%s 2>/dev/null", test_path);
+                shm_exec_ok = (system(test_cmd) == 0);
+            } else {
+                close(tfd);
+            }
+            unlink(test_path);
+        }
+        if (shm_exec_ok) {
+            snprintf(buf, bufsize, "/dev/shm/portable-cruby/%s", cache_key);
+            LOG("/dev/shm supports exec, using RAM cache\n");
+            return;
+        } else {
+            LOG("/dev/shm is noexec, using disk cache\n");
+        }
+    }
+#endif
+
     const char *xdg = getenv("XDG_CACHE_HOME");
     if (xdg && xdg[0]) {
         snprintf(buf, bufsize, "%s/portable-cruby/%s", xdg, cache_key);
@@ -137,42 +174,48 @@ static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
 static int verify_extraction(const char *dest_dir) {
     char path[PATH_MAX];
     snprintf(path, sizeof(path), "%s/bin/ruby", dest_dir);
-    return access(path, X_OK);
+    /* Use R_OK not X_OK: /dev/shm is mounted noexec on many systems,
+     * but we exec through the bundled musl loader, not directly. */
+    return access(path, R_OK);
 }
 
 static int extract_payload(const char *exe_path, off_t offset, off_t size,
                            const char *dest_dir) {
     char cmd[PATH_MAX * 2 + 256];
 
-    /* Attempt 1: bs=1 with zstd (works everywhere, just slower) */
-    snprintf(cmd, sizeof(cmd),
-        "dd if='%s' bs=1 skip=%lld count=%lld 2>/dev/null | "
-        "zstd -d -c 2>/dev/null | "
-        "tar xf - -C '%s'",
-        exe_path, (long long)offset, (long long)size, dest_dir);
+    /*
+     * Try extraction strategies in order:
+     * 1. GNU dd (iflag=skip_bytes) + zstd -- fast, Linux only
+     * 2. POSIX dd (bs=1) + zstd -- slow but universal
+     * 3. POSIX dd (bs=1) + gzip -- fallback if no zstd
+     *
+     * Each attempt is verified by checking if bin/ruby was extracted.
+     */
+    const char *dd_variants[] = {
+        /* GNU dd with byte-level skip/count (fast) */
+        "dd if='%s' iflag=skip_bytes,count_bytes bs=65536 skip=%lld count=%lld 2>/dev/null",
+        /* POSIX dd with bs=1 (slow but always works) */
+        "dd if='%s' bs=1 skip=%lld count=%lld 2>/dev/null",
+        NULL
+    };
+    const char *decompress[] = { "zstd -d -c", "gzip -d -c", NULL };
 
-    (void)system(cmd);
-    if (verify_extraction(dest_dir) == 0) return 0;
+    for (int d = 0; dd_variants[d]; d++) {
+        for (int z = 0; decompress[z]; z++) {
+            char dd_cmd[PATH_MAX + 128];
+            snprintf(dd_cmd, sizeof(dd_cmd), dd_variants[d],
+                     exe_path, (long long)offset, (long long)size);
+            snprintf(cmd, sizeof(cmd), "%s | %s | tar xf - -C '%s' 2>/dev/null",
+                     dd_cmd, decompress[z], dest_dir);
 
-    /* Attempt 2: GNU dd with iflag for better performance */
-    snprintf(cmd, sizeof(cmd),
-        "dd if='%s' bs=4096 iflag=skip_bytes,count_bytes skip=%lld count=%lld 2>/dev/null | "
-        "zstd -d -c 2>/dev/null | "
-        "tar xf - -C '%s'",
-        exe_path, (long long)offset, (long long)size, dest_dir);
-
-    (void)system(cmd);
-    if (verify_extraction(dest_dir) == 0) return 0;
-
-    /* Attempt 3: gzip fallback */
-    snprintf(cmd, sizeof(cmd),
-        "dd if='%s' bs=1 skip=%lld count=%lld 2>/dev/null | "
-        "gzip -d -c 2>/dev/null | "
-        "tar xf - -C '%s'",
-        exe_path, (long long)offset, (long long)size, dest_dir);
-
-    (void)system(cmd);
-    return verify_extraction(dest_dir);
+            LOG("trying: %s\n", d == 0 ? "fast dd + zstd" :
+                                d == 0 ? "fast dd + gzip" :
+                                z == 0 ? "slow dd + zstd" : "slow dd + gzip");
+            (void)system(cmd);
+            if (verify_extraction(dest_dir) == 0) return 0;
+        }
+    }
+    return -1;
 }
 
 static uint64_t read_le64(const unsigned char *p) {
@@ -280,7 +323,7 @@ int main(int argc, char **argv) {
         build_cache_path(cache_dir, sizeof(cache_dir), cache_key);
         snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", cache_dir);
 
-        if (access(ruby_bin, X_OK) == 0) {
+        if (access(ruby_bin, R_OK) == 0) {
             needs_extract = 0;
             LOG("cache hit: %s\n", cache_dir);
         } else {
@@ -295,7 +338,7 @@ int main(int argc, char **argv) {
         if (lock_fd >= 0) {
             if (flock(lock_fd, LOCK_EX) == 0) {
                 snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", cache_dir);
-                if (access(ruby_bin, X_OK) == 0) {
+                if (access(ruby_bin, R_OK) == 0) {
                     needs_extract = 0;
                     LOG("cache populated by another process\n");
                 }
@@ -303,8 +346,35 @@ int main(int argc, char **argv) {
         }
 
         if (needs_extract) {
-            if (extract_payload(exe_path, (off_t)payload_offset,
-                               (off_t)payload_size, cache_dir) != 0) {
+            int extract_ok = (extract_payload(exe_path, (off_t)payload_offset,
+                               (off_t)payload_size, cache_dir) == 0);
+
+#ifdef __linux__
+            /* If extraction to /dev/shm failed (e.g. size limit), fall back
+             * to ~/.cache on disk. */
+            if (!extract_ok && strncmp(cache_dir, "/dev/shm/", 9) == 0) {
+                LOG("shm extraction failed, falling back to disk cache\n");
+                cleanup_dir(cache_dir);
+                if (lock_fd >= 0) { unlink(lock_path); close(lock_fd); lock_fd = -1; }
+
+                /* Rebuild path without /dev/shm preference */
+                const char *home = getenv("HOME");
+                if (!home) home = "/tmp";
+                snprintf(cache_dir, sizeof(cache_dir),
+                         "%s/.cache/portable-cruby/%s", home, cache_key);
+                mkdirp(cache_dir, 0755);
+
+                snprintf(lock_path, sizeof(lock_path), "%s.lock", cache_dir);
+                lock_fd = open(lock_path, O_CREAT | O_WRONLY, 0644);
+                if (lock_fd >= 0) flock(lock_fd, LOCK_EX);
+
+                LOG("retrying extraction to %s\n", cache_dir);
+                extract_ok = (extract_payload(exe_path, (off_t)payload_offset,
+                                             (off_t)payload_size, cache_dir) == 0);
+            }
+#endif
+
+            if (!extract_ok) {
                 fprintf(stderr, "portable-cruby: extraction failed\n");
                 if (is_tmpdir) cleanup_dir(cache_dir);
                 if (lock_fd >= 0) { unlink(lock_path); close(lock_fd); }
@@ -324,7 +394,7 @@ int main(int argc, char **argv) {
     snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", cache_dir);
     snprintf(entry_script, sizeof(entry_script), "%s/entry.rb", cache_dir);
 
-    if (access(ruby_bin, X_OK) != 0) {
+    if (access(ruby_bin, R_OK) != 0) {
         fprintf(stderr, "portable-cruby: ruby not found at %s\n", ruby_bin);
         if (is_tmpdir) cleanup_dir(cache_dir);
         return 1;
@@ -369,14 +439,14 @@ int main(int argc, char **argv) {
     if (find_musl_loader(cache_dir, loader_path, sizeof(loader_path)) == 0) {
         snprintf(lib_path, sizeof(lib_path), "%s/lib", cache_dir);
         LOG("using bundled loader: %s\n", loader_path);
-        LOG("library path: %s\n", lib_path);
 
         /* argv: loader --library-path <lib> ruby entry.rb [user args...] */
+        char *exec_loader = loader_path;
         int new_argc = argc + 5;
         char **new_argv = malloc(sizeof(char *) * (new_argc + 1));
         if (!new_argv) { perror("malloc"); return 1; }
 
-        new_argv[0] = loader_path;
+        new_argv[0] = exec_loader;
         new_argv[1] = "--library-path";
         new_argv[2] = lib_path;
         new_argv[3] = ruby_bin;
@@ -386,7 +456,7 @@ int main(int argc, char **argv) {
         }
         new_argv[argc + 4] = NULL;
 
-        execv(loader_path, new_argv);
+        execv(exec_loader, new_argv);
         fprintf(stderr, "portable-cruby: exec loader failed: %s\n", strerror(errno));
         free(new_argv);
         /* Fall through to direct exec as fallback */
