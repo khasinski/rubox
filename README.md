@@ -152,22 +152,58 @@ Subsequent runs find the cached extraction and start immediately (~0.1s overhead
 
 ## How big are the binaries?
 
-For the `herb` gem (HTML+ERB parser with C extension):
+| App | Type | Gems | Binary size |
+|-----|------|------|-------------|
+| herb | Gem, C extension | 1 | 13 MB |
+| doom | Gem, pure Ruby | 1 | 13 MB |
+| sinatra app | Gemfile, web server | 5 | 14 MB |
+| rails CLI | Gemfile, framework | 67 | 44 MB |
 
-| Target | Size |
-|--------|------|
-| macOS arm64 | ~13 MB |
-| Linux arm64 | ~9 MB |
+## Try the examples
 
-Size depends on the gem and its dependencies. The Ruby interpreter is ~18 MB, but gzip compression and stdlib pruning bring the total down significantly.
+Four example projects are included in `examples/`. Build them all:
+
+```
+./examples/build-all.sh
+```
+
+Or build individually:
+
+```
+# Gem mode
+ruby -Ilib exe/portable-ruby pack -y --gem herb
+ruby -Ilib exe/portable-ruby pack -y --gem doom --entry doom
+
+# Gemfile mode
+ruby -Ilib exe/portable-ruby pack -y --gemfile examples/sinatra-app/Gemfile --entry sinatra-app
+ruby -Ilib exe/portable-ruby pack -y --gemfile examples/rails-cli/Gemfile --entry rails-cli
+```
+
+Test them:
+
+```
+./build/herb --version
+./build/doom --version
+./build/sinatra-app --check
+./build/rails-cli --version
+./build/rails-cli generate-key
+
+# Parse some HTML+ERB
+echo '<div><%= user.name %></div>' | ./build/herb parse -
+
+# Start a web server
+./build/sinatra-app &
+curl http://localhost:4567/
+kill %1
+```
 
 ## Development
 
 ```
 git clone https://github.com/khasinski/portable-ruby
 cd portable-ruby
-make test         # run the full test suite (30 tests)
-make herb         # build herb as a test case
+make test         # run the test suite (26 tests)
+make herb         # build herb as a quick test case
 ```
 
 ## License
