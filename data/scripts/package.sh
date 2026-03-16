@@ -456,33 +456,47 @@ Dir.glob(File.join(gem_base, "extensions", "**", "*.{bundle,so}")).each do |ext|
 end
 EOF
 
-    # Find the gem's exe script and read it to determine how to invoke the CLI.
-    # Instead of copying and loading the raw exe (which uses require_relative that
-    # breaks outside the gem's directory structure), we parse the exe to find the
-    # CLI invocation and generate a clean entry point.
+    # Invoke the gem's CLI. Two strategies:
+    #
+    # 1. If rubygems is available (macOS builds), use Gem.bin_path which
+    #    handles all edge cases (complex exe scripts, require_relative, etc.)
+    #
+    # 2. If rubygems is not loaded (static Linux builds), fall back to
+    #    require + grep approach for the CLI invocation.
+    #
+    cat >> "${STAGING_DIR}/entry.rb" << EOF
+
+# Try rubygems first (handles complex exe scripts correctly)
+begin
+  require "rubygems"
+  ENV["GEM_HOME"] = gem_base
+  ENV["GEM_PATH"] = gem_base
+  Gem.clear_paths
+  gem "${GEM_NAME}"
+  load Gem.bin_path("${GEM_NAME}", "${ENTRY_BIN}")
+rescue LoadError, NoMethodError
+  # Rubygems not available (static build) -- manual require + CLI
+  require "${GEM_NAME}"
+EOF
+
+    # Find the gem's exe script to extract the CLI invocation for the fallback path
     GEM_EXE=$(find "${RUBY_DIR}/lib/ruby/gems" -path "*/gems/${GEM_NAME}-*/exe/${ENTRY_BIN}" -type f | head -1)
     if [[ -z "$GEM_EXE" ]]; then
         GEM_EXE=$(find "${RUBY_DIR}/lib/ruby/gems" -path "*/gems/${GEM_NAME}-*/bin/${ENTRY_BIN}" -type f | head -1)
     fi
 
     if [[ -n "$GEM_EXE" ]]; then
-        # Extract the meaningful Ruby code (skip shebang, frozen_string_literal, require_relative to lib)
-        # and wrap it with a proper require
-        echo "" >> "${STAGING_DIR}/entry.rb"
-        echo "require \"${GEM_NAME}\"" >> "${STAGING_DIR}/entry.rb"
-        echo "" >> "${STAGING_DIR}/entry.rb"
-        # Copy lines that aren't boilerplate
-        grep -v '^#!' "$GEM_EXE" | \
+        # Extract just the CLI invocation (last non-empty, non-comment, non-boilerplate lines)
+        echo "  # Fallback CLI invocation from $(basename "$GEM_EXE")" >> "${STAGING_DIR}/entry.rb"
+        grep -v '^#' "$GEM_EXE" | \
           grep -v 'frozen_string_literal' | \
           grep -v 'require_relative' | \
-          sed '/^\s*$/d' >> "${STAGING_DIR}/entry.rb"
-    else
-        cat >> "${STAGING_DIR}/entry.rb" << EOF
-
-require "${GEM_NAME}"
-EOF
-        echo "    WARNING: no exe script found for '${ENTRY_BIN}' in gem '${GEM_NAME}'"
+          grep -v 'require\b' | \
+          grep -v '^\s*$' | \
+          sed 's/^/  /' >> "${STAGING_DIR}/entry.rb"
     fi
+
+    echo "end" >> "${STAGING_DIR}/entry.rb"
 fi
 
 echo "    Entry script created (mode: ${MODE})"
