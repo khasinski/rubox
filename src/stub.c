@@ -184,38 +184,28 @@ static int extract_payload(const char *exe_path, off_t offset, off_t size,
     char cmd[PATH_MAX * 2 + 256];
 
     /*
-     * Try extraction strategies in order:
-     * 1. GNU dd (iflag=skip_bytes) + zstd -- fast, Linux only
-     * 2. POSIX dd (bs=1) + zstd -- slow but universal
-     * 3. POSIX dd (bs=1) + gzip -- fallback if no zstd
-     *
-     * Each attempt is verified by checking if bin/ruby was extracted.
+     * Payload is gzip-compressed tar. Try two dd strategies:
+     * 1. GNU dd with iflag=skip_bytes (fast, 64K blocks)
+     * 2. POSIX dd with bs=1 (slow but works on macOS/busybox)
      */
-    const char *dd_variants[] = {
-        /* GNU dd with byte-level skip/count (fast) */
-        "dd if='%s' iflag=skip_bytes,count_bytes bs=65536 skip=%lld count=%lld 2>/dev/null",
-        /* POSIX dd with bs=1 (slow but always works) */
-        "dd if='%s' bs=1 skip=%lld count=%lld 2>/dev/null",
-        NULL
-    };
-    const char *decompress[] = { "zstd -d -c", "gzip -d -c", NULL };
 
-    for (int d = 0; dd_variants[d]; d++) {
-        for (int z = 0; decompress[z]; z++) {
-            char dd_cmd[PATH_MAX + 128];
-            snprintf(dd_cmd, sizeof(dd_cmd), dd_variants[d],
-                     exe_path, (long long)offset, (long long)size);
-            snprintf(cmd, sizeof(cmd), "%s | %s | tar xf - -C '%s' 2>/dev/null",
-                     dd_cmd, decompress[z], dest_dir);
+    /* Attempt 1: GNU dd (fast) */
+    snprintf(cmd, sizeof(cmd),
+        "dd if='%s' iflag=skip_bytes,count_bytes bs=65536 skip=%lld count=%lld 2>/dev/null | "
+        "gzip -d -c | tar xf - -C '%s' 2>/dev/null",
+        exe_path, (long long)offset, (long long)size, dest_dir);
+    LOG("trying: fast dd + gzip\n");
+    (void)system(cmd);
+    if (verify_extraction(dest_dir) == 0) return 0;
 
-            LOG("trying: %s\n", d == 0 ? "fast dd + zstd" :
-                                d == 0 ? "fast dd + gzip" :
-                                z == 0 ? "slow dd + zstd" : "slow dd + gzip");
-            (void)system(cmd);
-            if (verify_extraction(dest_dir) == 0) return 0;
-        }
-    }
-    return -1;
+    /* Attempt 2: POSIX dd (slow, universal) */
+    snprintf(cmd, sizeof(cmd),
+        "dd if='%s' bs=1 skip=%lld count=%lld 2>/dev/null | "
+        "gzip -d -c | tar xf - -C '%s' 2>/dev/null",
+        exe_path, (long long)offset, (long long)size, dest_dir);
+    LOG("trying: slow dd + gzip\n");
+    (void)system(cmd);
+    return verify_extraction(dest_dir);
 }
 
 static uint64_t read_le64(const unsigned char *p) {

@@ -426,14 +426,10 @@ echo "    Entry script created (mode: ${MODE})"
 echo "==> Compressing payload..."
 cd "${STAGING_DIR}"
 
-if command -v zstd &>/dev/null; then
-    # --no-mac-metadata avoids ._* resource fork files that confuse GNU tar on Linux
-    tar cf - --no-mac-metadata . 2>/dev/null | zstd -19 -T0 > "${PAYLOAD_FILE}" || \
-    tar cf - . | zstd -19 -T0 > "${PAYLOAD_FILE}"
-else
-    echo "    (install zstd for ~30% better compression)"
-    tar czf "${PAYLOAD_FILE}" .
-fi
+# Use gzip -- universally available on all target systems (no zstd dependency).
+# --no-mac-metadata avoids ._* resource fork files that confuse GNU tar on Linux.
+tar czf "${PAYLOAD_FILE}" --no-mac-metadata . 2>/dev/null || \
+tar czf "${PAYLOAD_FILE}" .
 cd "${PROJECT_DIR}"
 
 PAYLOAD_SIZE=$(stat -f%z "${PAYLOAD_FILE}" 2>/dev/null || stat -c%s "${PAYLOAD_FILE}" 2>/dev/null)
