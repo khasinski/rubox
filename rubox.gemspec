@@ -17,14 +17,12 @@ Gem::Specification.new do |spec|
   spec.files = Dir[
     "lib/**/*.rb",
     "exe/*",
-    "ext/**/*.{rb,c}",
     "data/**/*",
     "LICENSE",
   ]
 
   spec.bindir = "exe"
   spec.executables = ["rubox"]
-  spec.extensions = ["ext/rubox/extconf.rb"]
   spec.require_paths = ["lib"]
 
   spec.metadata["homepage_uri"] = spec.homepage

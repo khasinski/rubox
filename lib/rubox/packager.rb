@@ -66,49 +66,46 @@ module Rubox
 
     private
 
+    # Find a pre-built stub for the target, or compile one from source.
     def stub_path
-      if Platform.linux_target?(@target) && !Platform.linux_target?(Platform.host_target)
-        build_linux_stub
-      else
-        build_host_stub
-      end
-    end
+      prebuilt = File.join(Rubox.data_dir, "stubs", "stub-#{@target}")
+      return prebuilt if File.exist?(prebuilt)
 
-    def build_host_stub
-      stub = File.join("build", "stub")
+      # No pre-built stub -- compile from source
+      stub = File.join("build", "stub-#{@target}")
       unless File.exist?(stub)
-        compile_stub("stub.c", stub)
+        Dir.mkdir("build") unless Dir.exist?("build")
+        src = File.join(Rubox.data_dir, "ext", "stub.c")
+
+        if Platform.cross_build?(@target)
+          puts "Cross-compiling stub for #{@target} via Docker..."
+          docker_platform = @target.start_with?("x86_64") ? "linux/amd64" : "linux/arm64"
+          system(
+            "docker", "run", "--rm", "--platform", docker_platform,
+            "-v", "#{Dir.pwd}:/src", "-w", "/src",
+            "alpine:3.21",
+            "sh", "-c",
+            "apk add --no-cache gcc musl-dev >/dev/null 2>&1 && " \
+            "cc -O2 -Wall -Wextra -static -o #{stub} #{src}",
+            exception: true
+          )
+        else
+          system("cc", "-O2", "-Wall", "-Wextra", "-o", stub, src, exception: true)
+        end
       end
       stub
-    end
-
-    def build_linux_stub
-      stub = File.join("build", "stub-linux")
-      unless File.exist?(stub)
-        puts "Cross-compiling stub for Linux via Docker..."
-        system(
-          "docker", "run", "--rm",
-          "-v", "#{Dir.pwd}:/src", "-w", "/src",
-          "alpine:3.21",
-          "sh", "-c",
-          "apk add --no-cache gcc musl-dev >/dev/null 2>&1 && " \
-          "cc -O2 -Wall -Wextra -static -o build/stub-linux #{stub_source}",
-          exception: true
-        )
-      end
-      stub
-    end
-
-    def compile_stub(source, output)
-      Dir.mkdir("build") unless Dir.exist?("build")
-      system("cc", "-O2", "-Wall", "-Wextra", "-o", output, stub_source, exception: true)
-    end
-
-    def stub_source
-      File.join(Rubox.data_dir, "ext", "stub.c")
     end
 
     def ensure_write_footer!
+      prebuilt = File.join(Rubox.data_dir, "stubs", "write-footer-#{@target}")
+      if File.exist?(prebuilt)
+        # Symlink pre-built into build/ so package.sh can find it
+        Dir.mkdir("build") unless Dir.exist?("build")
+        wf = File.join("build", "write-footer")
+        FileUtils.cp(prebuilt, wf) unless File.exist?(wf)
+        return
+      end
+
       wf = File.join("build", "write-footer")
       return if File.exist?(wf)
 
