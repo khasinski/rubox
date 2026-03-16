@@ -2,3 +2,5 @@ build/
 vendor/
 packaging/
 *.gem
+Gemfile.lock
+tmp/
