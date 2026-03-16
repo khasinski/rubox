@@ -54,8 +54,10 @@ RUN set -ex && \
 # IMPORTANT: We specifically exclude libc.a, libdl.a, libpthread.a, libm.a etc.
 # because statically linking those disables dlopen, which we need for gem extensions.
 RUN mkdir -p /build/static-libs && \
+    # NOTE: libffi excluded -- its .a is not compiled with -fPIC on x86_64,
+    # which breaks fiddle.so linking. fiddle uses libffi dynamically instead.
     for lib in libssl libcrypto libyaml libz libreadline libhistory libncursesw \
-               libffi libgdbm libxml2 libxslt libsqlite3; do \
+               libgdbm libxml2 libxslt libsqlite3; do \
         [ -f "/usr/lib/${lib}.a" ] && ln -sf "/usr/lib/${lib}.a" /build/static-libs/; \
     done && \
     echo "Staged static libs:" && ls /build/static-libs/
