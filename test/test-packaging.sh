@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Test suite for portable-cruby packaging.
+# Test suite for portable-ruby packaging.
 # Run: make test  (or ./test/test-packaging.sh)
 #
 set -euo pipefail
@@ -52,7 +52,7 @@ if [[ -f "$RUBY_DIR/bin/ruby" ]]; then
         "$RUBY_DIR/bin/gem" install herb --no-document >/dev/null 2>&1
     fi
 
-    rm -rf ~/.cache/portable-cruby/
+    rm -rf ~/.cache/portable-ruby/
     ./scripts/package.sh --ruby-dir "$RUBY_DIR" --gem herb --entry herb \
         --stub build/stub --output build/test-herb >/dev/null 2>&1
     [[ -f build/test-herb ]] && pass "gem mode: binary created" || fail "gem mode: binary created"
@@ -87,7 +87,7 @@ echo "=== macOS gemfile mode ==="
 # ===================================================================
 
 if [[ -f "$RUBY_DIR/bin/ruby" ]]; then
-    rm -rf ~/.cache/portable-cruby/
+    rm -rf ~/.cache/portable-ruby/
     ./scripts/package.sh --ruby-dir "$RUBY_DIR" \
         --gemfile test/gemfile-app/Gemfile --entry herb-app \
         --stub build/stub --output build/test-herb-app >/dev/null 2>&1
@@ -117,10 +117,10 @@ if [[ -f "$LINUX_RUBY/bin/ruby" ]] && command -v docker &>/dev/null; then
             sh -c "apk add --no-cache build-base libgcc >/dev/null 2>&1 && /opt/ruby/bin/gem install herb --no-document" >/dev/null 2>&1
     fi
 
-    # Build Linux stub if needed
-    [[ -f build/stub-linux ]] || make stub-linux >/dev/null 2>&1
+    # Ensure Linux stub is up-to-date
+    make stub-linux >/dev/null 2>&1
 
-    rm -rf ~/.cache/portable-cruby/
+    rm -rf ~/.cache/portable-ruby/
     ./scripts/package.sh --ruby-dir "$LINUX_RUBY" --gem herb --entry herb \
         --stub build/stub-linux --output build/test-herb-linux >/dev/null 2>&1
     [[ -f build/test-herb-linux ]] && pass "linux: binary created" || fail "linux: binary created"
@@ -150,15 +150,15 @@ echo "=== Entry script tests ==="
 if [[ -f "$RUBY_DIR/bin/ruby" ]]; then
     # The binary from gem mode test should have populated the cache already.
     # Re-package to ensure fresh cache.
-    rm -rf ~/.cache/portable-cruby/
+    rm -rf ~/.cache/portable-ruby/
     ./scripts/package.sh --ruby-dir "$RUBY_DIR" --gem herb --entry herb \
         --stub build/stub --output build/test-entry >/dev/null 2>&1
     # Run it to extract the cache
     ./build/test-entry --version >/dev/null 2>&1 || true
 
-    CACHE_DIR=$(ls -d ~/.cache/portable-cruby/*/ 2>/dev/null | head -1)
+    CACHE_DIR=$(ls -d ~/.cache/portable-ruby/*/ 2>/dev/null | head -1)
     if [[ -n "$CACHE_DIR" && -f "$CACHE_DIR/entry.rb" ]]; then
-        grep -q 'PORTABLE_CRUBY_ROOT' "$CACHE_DIR/entry.rb" && pass "entry.rb: has ROOT env" || fail "entry.rb: has ROOT env"
+        grep -q 'PORTABLE_RUBY_ROOT' "$CACHE_DIR/entry.rb" && pass "entry.rb: has ROOT env" || fail "entry.rb: has ROOT env"
         grep -q 'LOAD_PATH' "$CACHE_DIR/entry.rb" && pass "entry.rb: sets load path" || fail "entry.rb: sets load path"
         grep -q 'require "herb"' "$CACHE_DIR/entry.rb" && pass "entry.rb: requires gem" || fail "entry.rb: requires gem"
         if grep -q 'require_relative' "$CACHE_DIR/entry.rb"; then

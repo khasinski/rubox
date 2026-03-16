@@ -129,7 +129,7 @@ if [[ "$MODE" == "gemfile" ]]; then
             BUNDLE_GEMS_REL="${BUNDLE_GEMS_DIR#${STAGING_DIR}/}"
             echo "    Rewriting load paths to use runtime root..."
 
-            # Generate a new setup.rb that uses PORTABLE_CRUBY_ROOT
+            # Generate a new setup.rb that uses PORTABLE_RUBY_ROOT
             SETUP_HEADER='require "rbconfig"
 module Kernel
   remove_method(:gem) if private_method_defined?(:gem)
@@ -139,7 +139,7 @@ end
 '
             {
                 echo "$SETUP_HEADER"
-                echo '_root = ENV["PORTABLE_CRUBY_ROOT"]'
+                echo '_root = ENV["PORTABLE_RUBY_ROOT"]'
                 # Find all gem lib dirs and extension dirs
                 find "$BUNDLE_GEMS_DIR" -maxdepth 2 -name "lib" -type d | while read -r lib_dir; do
                     rel="${lib_dir#${STAGING_DIR}/}"
@@ -392,11 +392,11 @@ if [[ "$MODE" == "gemfile" ]]; then
     echo "    Entry point: ${ENTRY_PATH}"
 
     cat > "${STAGING_DIR}/entry.rb" << EOF
-# portable-cruby entry (gemfile mode)
-root = ENV["PORTABLE_CRUBY_ROOT"]
+# portable-ruby entry (gemfile mode)
+root = ENV["PORTABLE_RUBY_ROOT"]
 
 # Cleanup handler for no-cache mode
-if cleanup_dir = ENV["PORTABLE_CRUBY_CLEANUP"]
+if cleanup_dir = ENV["PORTABLE_RUBY_CLEANUP"]
   at_exit { require "fileutils"; FileUtils.rm_rf(cleanup_dir) rescue nil }
 end
 
@@ -414,11 +414,11 @@ else
     # Gem mode: set up load paths manually to avoid rubygems dependency.
     # Static Ruby builds may not have rubygems loaded by default.
     cat > "${STAGING_DIR}/entry.rb" << 'ENTRY_EOF'
-# portable-cruby entry (gem mode)
-root = ENV["PORTABLE_CRUBY_ROOT"]
+# portable-ruby entry (gem mode)
+root = ENV["PORTABLE_RUBY_ROOT"]
 
 # Cleanup handler for no-cache mode
-if cleanup_dir = ENV["PORTABLE_CRUBY_CLEANUP"]
+if cleanup_dir = ENV["PORTABLE_RUBY_CLEANUP"]
   at_exit do
     require "fileutils"
     FileUtils.rm_rf(cleanup_dir) rescue nil

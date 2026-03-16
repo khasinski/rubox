@@ -1,19 +1,19 @@
 #!/usr/bin/env bash
 #
-# portable-cruby - Package Ruby apps into single portable binaries.
+# portable-ruby - Package Ruby apps into single portable binaries.
 #
 # Usage:
-#   portable-cruby pack --gem herb [--target aarch64-darwin]
-#   portable-cruby pack --gemfile Gemfile --entry my_app [--target aarch64-linux]
-#   portable-cruby build-ruby [--target aarch64-linux]
-#   portable-cruby clean
+#   portable-ruby pack --gem herb [--target aarch64-darwin]
+#   portable-ruby pack --gemfile Gemfile --entry my_app [--target aarch64-linux]
+#   portable-ruby build-ruby [--target aarch64-linux]
+#   portable-ruby clean
 #
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-RUBY_VERSION="${PORTABLE_CRUBY_RUBY_VERSION:-4.0.0}"
+RUBY_VERSION="${PORTABLE_RUBY_RUBY_VERSION:-4.0.0}"
 
 # Auto-detect host target
 HOST_ARCH=$(uname -m | sed 's/arm64/aarch64/' | sed 's/amd64/x86_64/')
@@ -22,7 +22,7 @@ HOST_TARGET="${HOST_ARCH}-${HOST_OS}"
 
 usage() {
     cat <<'EOF'
-portable-cruby - Package Ruby apps into single portable binaries.
+portable-ruby - Package Ruby apps into single portable binaries.
 
 Commands:
   pack          Package a gem or Gemfile-based app into a single binary
@@ -45,12 +45,12 @@ Targets:
   x86_64-linux      Linux x86_64
 
 Environment:
-  PORTABLE_CRUBY_RUBY_VERSION  Ruby version to build (default: 4.0.0)
+  PORTABLE_RUBY_RUBY_VERSION  Ruby version to build (default: 4.0.0)
 
 Examples:
-  portable-cruby pack --gem herb
-  portable-cruby pack --gem rails --entry rails --target aarch64-linux
-  portable-cruby pack --gemfile ./Gemfile --entry my_app
+  portable-ruby pack --gem herb
+  portable-ruby pack --gem rails --entry rails --target aarch64-linux
+  portable-ruby pack --gemfile ./Gemfile --entry my_app
 EOF
 }
 
@@ -87,7 +87,7 @@ cmd_pack() {
 
     if [[ -z "$gem" && -z "$gemfile" ]]; then
         echo "ERROR: Must specify --gem or --gemfile"
-        echo "Run: portable-cruby pack --help"
+        echo "Run: portable-ruby pack --help"
         exit 1
     fi
 
@@ -181,7 +181,7 @@ case "${1:-}" in
     -h|--help|help|"")  usage ;;
     *)
         echo "Unknown command: $1"
-        echo "Run: portable-cruby --help"
+        echo "Run: portable-ruby --help"
         exit 1
         ;;
 esac

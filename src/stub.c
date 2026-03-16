@@ -1,5 +1,5 @@
 /*
- * portable-cruby stub
+ * portable-ruby stub
  *
  * Self-extracting loader with content-addressed caching.
  *
@@ -7,7 +7,7 @@
  *   1. Opens its own executable (via /proc/self/exe or argv[0])
  *   2. Reads the 24-byte footer to find the payload offset and size
  *   3. Derives a cache key from offset+size (unique per build)
- *   4. Checks ~/.cache/portable-cruby/<key>/ for existing extraction
+ *   4. Checks ~/.cache/portable-ruby/<key>/ for existing extraction
  *   5. If not cached, extracts payload there
  *   6. Execs the bundled Ruby interpreter with the entry script
  *
@@ -21,9 +21,9 @@
  *   [8 bytes] magic          "CRUBY\x00\x01\x00"
  *
  * Env vars:
- *   PORTABLE_CRUBY_CACHE    Override cache directory
- *   PORTABLE_CRUBY_NO_CACHE Set to 1 to extract to tmpdir with cleanup
- *   PORTABLE_CRUBY_VERBOSE  Set to 1 for debug messages
+ *   PORTABLE_RUBY_CACHE    Override cache directory
+ *   PORTABLE_RUBY_NO_CACHE Set to 1 to extract to tmpdir with cleanup
+ *   PORTABLE_RUBY_VERBOSE  Set to 1 for debug messages
  */
 
 #define _GNU_SOURCE
@@ -55,7 +55,7 @@
 static const char PAYLOAD_MAGIC[MAGIC_SIZE] = MAGIC;
 static int verbose = 0;
 
-#define LOG(...) do { if (verbose) fprintf(stderr, "portable-cruby: " __VA_ARGS__); } while(0)
+#define LOG(...) do { if (verbose) fprintf(stderr, "portable-ruby: " __VA_ARGS__); } while(0)
 
 static int self_exe_path(char *buf, size_t bufsize) {
 #ifdef __linux__
@@ -103,7 +103,7 @@ static int make_tmpdir(char *buf, size_t bufsize) {
     if (!tmpdir) tmpdir = getenv("TMP");
     if (!tmpdir) tmpdir = "/tmp";
 
-    snprintf(buf, bufsize, "%s/portable-cruby.XXXXXX", tmpdir);
+    snprintf(buf, bufsize, "%s/portable-ruby.XXXXXX", tmpdir);
     if (mkdtemp(buf) == NULL) {
         perror("mkdtemp");
         return -1;
@@ -118,7 +118,7 @@ static void cleanup_dir(const char *path) {
 }
 
 static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
-    const char *override = getenv("PORTABLE_CRUBY_CACHE");
+    const char *override = getenv("PORTABLE_RUBY_CACHE");
     if (override && override[0]) {
         snprintf(buf, bufsize, "%s", override);
         return;
@@ -137,7 +137,7 @@ static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
         access("/dev/shm", W_OK) == 0) {
         /* Check for noexec by trying to create and exec a tiny script */
         int shm_exec_ok = 0;
-        char test_path[] = "/dev/shm/.portable-cruby-exec-test";
+        char test_path[] = "/dev/shm/.portable-ruby-exec-test";
         int tfd = open(test_path, O_CREAT | O_WRONLY | O_TRUNC, 0755);
         if (tfd >= 0) {
             const char *script = "#!/bin/sh\nexit 0\n";
@@ -152,7 +152,7 @@ static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
             unlink(test_path);
         }
         if (shm_exec_ok) {
-            snprintf(buf, bufsize, "/dev/shm/portable-cruby/%s", cache_key);
+            snprintf(buf, bufsize, "/dev/shm/portable-ruby/%s", cache_key);
             LOG("/dev/shm supports exec, using RAM cache\n");
             return;
         } else {
@@ -163,11 +163,11 @@ static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
 
     const char *xdg = getenv("XDG_CACHE_HOME");
     if (xdg && xdg[0]) {
-        snprintf(buf, bufsize, "%s/portable-cruby/%s", xdg, cache_key);
+        snprintf(buf, bufsize, "%s/portable-ruby/%s", xdg, cache_key);
     } else {
         const char *home = getenv("HOME");
         if (!home) home = "/tmp";
-        snprintf(buf, bufsize, "%s/.cache/portable-cruby/%s", home, cache_key);
+        snprintf(buf, bufsize, "%s/.cache/portable-ruby/%s", home, cache_key);
     }
 }
 
@@ -249,15 +249,15 @@ int main(int argc, char **argv) {
     char lock_path[PATH_MAX];
     unsigned char footer[FOOTER_SIZE];
 
-    verbose = (getenv("PORTABLE_CRUBY_VERBOSE") != NULL);
+    verbose = (getenv("PORTABLE_RUBY_VERBOSE") != NULL);
     int no_cache = 0;
-    const char *nc = getenv("PORTABLE_CRUBY_NO_CACHE");
+    const char *nc = getenv("PORTABLE_RUBY_NO_CACHE");
     if (nc && nc[0] == '1') no_cache = 1;
 
     /* Find our own executable */
     if (self_exe_path(exe_path, sizeof(exe_path)) != 0) {
         if (argv[0] && realpath(argv[0], exe_path) == NULL) {
-            fprintf(stderr, "portable-cruby: cannot determine executable path\n");
+            fprintf(stderr, "portable-ruby: cannot determine executable path\n");
             return 1;
         }
     }
@@ -266,19 +266,19 @@ int main(int argc, char **argv) {
     /* Read the footer */
     FILE *fp = fopen(exe_path, "rb");
     if (!fp) {
-        fprintf(stderr, "portable-cruby: cannot open %s: %s\n",
+        fprintf(stderr, "portable-ruby: cannot open %s: %s\n",
                 exe_path, strerror(errno));
         return 1;
     }
 
     if (fseek(fp, -FOOTER_SIZE, SEEK_END) != 0) {
-        fprintf(stderr, "portable-cruby: cannot seek to footer\n");
+        fprintf(stderr, "portable-ruby: cannot seek to footer\n");
         fclose(fp);
         return 1;
     }
 
     if (fread(footer, 1, FOOTER_SIZE, fp) != FOOTER_SIZE) {
-        fprintf(stderr, "portable-cruby: cannot read footer\n");
+        fprintf(stderr, "portable-ruby: cannot read footer\n");
         fclose(fp);
         return 1;
     }
@@ -286,7 +286,7 @@ int main(int argc, char **argv) {
 
     /* Verify magic */
     if (memcmp(footer + 16, PAYLOAD_MAGIC, MAGIC_SIZE) != 0) {
-        fprintf(stderr, "portable-cruby: no payload found (bad magic)\n");
+        fprintf(stderr, "portable-ruby: no payload found (bad magic)\n");
         return 1;
     }
 
@@ -351,7 +351,7 @@ int main(int argc, char **argv) {
                 const char *home = getenv("HOME");
                 if (!home) home = "/tmp";
                 snprintf(cache_dir, sizeof(cache_dir),
-                         "%s/.cache/portable-cruby/%s", home, cache_key);
+                         "%s/.cache/portable-ruby/%s", home, cache_key);
                 mkdirp(cache_dir, 0755);
 
                 snprintf(lock_path, sizeof(lock_path), "%s.lock", cache_dir);
@@ -365,7 +365,7 @@ int main(int argc, char **argv) {
 #endif
 
             if (!extract_ok) {
-                fprintf(stderr, "portable-cruby: extraction failed\n");
+                fprintf(stderr, "portable-ruby: extraction failed\n");
                 if (is_tmpdir) cleanup_dir(cache_dir);
                 if (lock_fd >= 0) { unlink(lock_path); close(lock_fd); }
                 return 1;
@@ -385,20 +385,20 @@ int main(int argc, char **argv) {
     snprintf(entry_script, sizeof(entry_script), "%s/entry.rb", cache_dir);
 
     if (access(ruby_bin, R_OK) != 0) {
-        fprintf(stderr, "portable-cruby: ruby not found at %s\n", ruby_bin);
+        fprintf(stderr, "portable-ruby: ruby not found at %s\n", ruby_bin);
         if (is_tmpdir) cleanup_dir(cache_dir);
         return 1;
     }
 
     if (access(entry_script, R_OK) != 0) {
-        fprintf(stderr, "portable-cruby: entry.rb not found at %s\n", entry_script);
+        fprintf(stderr, "portable-ruby: entry.rb not found at %s\n", entry_script);
         if (is_tmpdir) cleanup_dir(cache_dir);
         return 1;
     }
 
     /* Set environment */
     char root_env[PATH_MAX + 32];
-    snprintf(root_env, sizeof(root_env), "PORTABLE_CRUBY_ROOT=%s", cache_dir);
+    snprintf(root_env, sizeof(root_env), "PORTABLE_RUBY_ROOT=%s", cache_dir);
     putenv(root_env);
 
     putenv("BUNDLE_GEMFILE=");
@@ -406,7 +406,7 @@ int main(int argc, char **argv) {
     if (is_tmpdir) {
         char cleanup_env[PATH_MAX + 32];
         snprintf(cleanup_env, sizeof(cleanup_env),
-                 "PORTABLE_CRUBY_CLEANUP=%s", cache_dir);
+                 "PORTABLE_RUBY_CLEANUP=%s", cache_dir);
         putenv(cleanup_env);
     }
 
@@ -447,7 +447,7 @@ int main(int argc, char **argv) {
         new_argv[argc + 4] = NULL;
 
         execv(exec_loader, new_argv);
-        fprintf(stderr, "portable-cruby: exec loader failed: %s\n", strerror(errno));
+        fprintf(stderr, "portable-ruby: exec loader failed: %s\n", strerror(errno));
         free(new_argv);
         /* Fall through to direct exec as fallback */
     } else {
@@ -472,7 +472,7 @@ int main(int argc, char **argv) {
 
     execv(ruby_bin, new_argv);
 
-    fprintf(stderr, "portable-cruby: exec failed: %s\n", strerror(errno));
+    fprintf(stderr, "portable-ruby: exec failed: %s\n", strerror(errno));
     if (is_tmpdir) cleanup_dir(cache_dir);
     free(new_argv);
     return 1;

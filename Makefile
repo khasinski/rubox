@@ -109,4 +109,4 @@ clean: ## Remove all build artifacts
 	rm -rf build/
 
 clean-cache: ## Remove extraction cache
-	rm -rf ~/.cache/portable-cruby/
+	rm -rf ~/.cache/portable-ruby/
