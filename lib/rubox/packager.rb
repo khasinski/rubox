@@ -53,8 +53,9 @@ module Rubox
       else
         # Cross-platform -- use Docker
         puts "Installing #{gem_name} via Docker (cross-platform)..."
+        docker_platform = @target.start_with?("x86_64") ? "linux/amd64" : "linux/arm64"
         system(
-          "docker", "run", "--rm",
+          "docker", "run", "--rm", "--platform", docker_platform,
           "-v", "#{File.expand_path(@ruby_dir)}:/opt/ruby",
           "alpine:3.21",
           "sh", "-c",

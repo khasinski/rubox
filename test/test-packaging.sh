@@ -177,25 +177,40 @@ echo "=== 8. Linux cross-distro ==="
 
 LINUX_RUBY=$(ls -d build/ruby-*-*-linux 2>/dev/null | head -1 || true)
 if [[ -n "$LINUX_RUBY" && -f "$LINUX_RUBY/bin/ruby" ]] && command -v docker &>/dev/null; then
+    # Detect arch from binary and directory name
+    if echo "$LINUX_RUBY" | grep -q x86_64; then
+        DOCKER_PLATFORM="linux/amd64"
+        STUB_TARGET="x86_64-linux"
+    else
+        DOCKER_PLATFORM="linux/arm64"
+        STUB_TARGET="aarch64-linux"
+    fi
+
     find "$LINUX_RUBY/lib/ruby/gems" -maxdepth 3 -type d -name "herb-*" | grep -q . || {
-        docker run --rm -v "$(pwd)/$LINUX_RUBY:/opt/ruby" alpine:3.21 \
+        docker run --rm --platform "$DOCKER_PLATFORM" -v "$(pwd)/$LINUX_RUBY:/opt/ruby" alpine:3.21 \
             sh -c "apk add --no-cache build-base libgcc >/dev/null 2>&1 && /opt/ruby/bin/gem install herb --no-document" >/dev/null 2>&1
     }
 
-    [[ -f build/stub-linux ]] || \
-        docker run --rm -v "$(pwd):/src" -w /src alpine:3.21 \
+    # Use pre-built stub if available, otherwise compile
+    STUB_FILE="build/stub-linux"
+    PREBUILT="data/stubs/stub-${STUB_TARGET}"
+    if [[ -f "$PREBUILT" ]]; then
+        STUB_FILE="$PREBUILT"
+    elif [[ ! -f "$STUB_FILE" ]]; then
+        docker run --rm --platform "$DOCKER_PLATFORM" -v "$(pwd):/src" -w /src alpine:3.21 \
             sh -c "apk add --no-cache gcc musl-dev >/dev/null 2>&1 && cc -O2 -Wall -Wextra -static -o build/stub-linux data/ext/stub.c" >/dev/null 2>&1
+    fi
 
     rm -rf ~/.cache/rubox/
     RUBOX_DATA_DIR="$PROJECT_DIR/data" \
         data/scripts/package.sh --ruby-dir "$LINUX_RUBY" --gem herb --entry herb \
-        --stub build/stub-linux --output build/test-herb-linux >/dev/null 2>&1
+        --stub "$STUB_FILE" --output build/test-herb-linux >/dev/null 2>&1
 
     [[ -f build/test-herb-linux ]] && pass "linux: binary created" || fail "linux: binary created" ""
 
     for distro in "alpine:3.21" "ubuntu:24.04" "debian:12"; do
         name=$(echo "$distro" | cut -d: -f1)
-        OUT=$(docker run --rm -v "$(pwd)/build:/app" "$distro" \
+        OUT=$(docker run --rm --platform "$DOCKER_PLATFORM" -v "$(pwd)/build:/app" "$distro" \
             sh -c "/app/test-herb-linux --version" 2>&1 | grep herb || true)
         assert_contains "$OUT" "herb" "linux/$name: runs"
     done
