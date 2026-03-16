@@ -10,7 +10,6 @@ module Rubox
     def initialize(argv)
       @argv = argv.dup
       @options = {
-        target: Platform.host_target,
         prune: "default",
         yes: false,
       }
@@ -66,10 +65,14 @@ module Rubox
 
     def cmd_pack
       detector = Detector.new
-      target = @options[:target]
 
-      # Auto-detect mode if neither --gem nor --gemfile specified
-      gem_name = @options[:gem]
+      if detector.has_config?
+        puts "Using config: #{Detector::CONFIG_FILE}"
+      end
+
+      # Merge: CLI flags > .rubox.yml > auto-detection
+      target = @options[:target] || detector.target || Platform.host_target
+      gem_name = @options[:gem] || detector.gem_name
       gemfile = @options[:gemfile]
 
       if gem_name.nil? && gemfile.nil?
@@ -82,9 +85,8 @@ module Rubox
         end
       end
 
-      # Detect Ruby version
       ruby_version = @options[:ruby_version] || detector.ruby_version
-      entry = @options[:entry] || gem_name || detector.entry_name
+      entry = @options[:entry] || (gem_name if gem_name) || detector.entry_name
 
       # Output path
       output = @options[:output] || begin
@@ -124,8 +126,8 @@ module Rubox
         gem_name: gem_name,
         gemfile: gemfile,
         entry: entry,
-        prune: @options[:prune],
-        keep_gems: @options[:keep_gems],
+        prune: @options[:prune] || detector.prune || "default",
+        keep_gems: @options[:keep_gems] || detector.keep_gems,
       )
 
       if gem_name
