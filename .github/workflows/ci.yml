@@ -78,7 +78,7 @@ jobs:
             --output build/ruby
         timeout-minutes: 15
       - name: Install herb
-        run: build/ruby/bin/gem install herb --no-document
+        run: build/ruby/bin/ruby build/ruby/bin/gem install herb --no-document
       - name: Package
         run: |
           mkdir -p build
