@@ -26,8 +26,11 @@ RUN apk add --no-cache \
     gdbm-dev \
     curl \
     autoconf \
-    bison \
-    rust cargo
+    bison
+
+# Rust is needed for YJIT but may not be available on all architectures
+# (e.g. cross-compiling x86_64 on arm64 via qemu). Optional.
+RUN apk add --no-cache rust cargo || true
 
 # Extra native extension deps (static where available)
 RUN apk add --no-cache \
@@ -65,7 +68,10 @@ WORKDIR /build/ruby-${RUBY_VERSION}
 #   of openssl, zlib, yaml, readline, etc.
 # - We do NOT use LDFLAGS="-static" because that disables dlopen entirely,
 #   which is needed for loading gem native extensions (.so files).
-RUN ./configure \
+RUN YJIT_FLAG="--disable-yjit" && \
+    if command -v rustc >/dev/null 2>&1; then YJIT_FLAG="--enable-yjit"; fi && \
+    echo "YJIT: $YJIT_FLAG" && \
+    ./configure \
     --prefix=/opt/ruby \
     --disable-shared \
     --enable-static \
@@ -74,7 +80,7 @@ RUN ./configure \
     --disable-install-capi \
     --with-static-linked-ext \
     --without-gmp \
-    --enable-yjit \
+    $YJIT_FLAG \
     LDFLAGS="-L/build/static-libs" \
     CFLAGS="-O2 -fPIC"
 
