@@ -68,10 +68,25 @@ rubox pack [options]
 ### Other commands
 
 ```
-rubox build-ruby              # just build the Ruby interpreter
+rubox build-ruby              # build the Ruby interpreter
 rubox clean                   # remove build artifacts
 rubox --version
 ```
+
+## Configuration
+
+Create a `.rubox.yml` in your project root to set defaults:
+
+```yaml
+entry: bin/my_app
+target: aarch64-linux
+prune: default
+keep_gems:
+  - nokogiri
+  - pg
+```
+
+CLI flags override config file values, which override auto-detection.
 
 ## Examples
 
@@ -152,58 +167,29 @@ Subsequent runs find the cached extraction and start immediately (~0.1s overhead
 
 ## How big are the binaries?
 
-| App | Type | Gems | Binary size |
-|-----|------|------|-------------|
-| herb | Gem, C extension | 1 | 13 MB |
-| doom | Gem, pure Ruby | 1 | 13 MB |
+Sizes for the `herb` gem (HTML+ERB parser with native C extension):
+
+| Target | Size |
+|--------|------|
+| macOS arm64 | 13 MB |
+| Linux arm64 | 9 MB |
+| Linux x86_64 | 9 MB |
+
+Other examples (macOS arm64):
+
+| App | Type | Gems | Size |
+|-----|------|------|------|
+| doom | Pure Ruby gem | 1 | 13 MB |
 | sinatra app | Gemfile, web server | 5 | 14 MB |
 | rails CLI | Gemfile, framework | 67 | 44 MB |
-
-## Try the examples
-
-Four example projects are included in `examples/`. Build them all:
-
-```
-./examples/build-all.sh
-```
-
-Or build individually:
-
-```
-# Gem mode
-ruby -Ilib exe/rubox pack -y --gem herb
-ruby -Ilib exe/rubox pack -y --gem doom --entry doom
-
-# Gemfile mode
-ruby -Ilib exe/rubox pack -y --gemfile examples/sinatra-app/Gemfile --entry sinatra-app
-ruby -Ilib exe/rubox pack -y --gemfile examples/rails-cli/Gemfile --entry rails-cli
-```
-
-Test them:
-
-```
-./build/herb --version
-./build/doom --version
-./build/sinatra-app --check
-./build/rails-cli --version
-./build/rails-cli generate-key
-
-# Parse some HTML+ERB
-echo '<div><%= user.name %></div>' | ./build/herb parse -
-
-# Start a web server
-./build/sinatra-app &
-curl http://localhost:4567/
-kill %1
-```
 
 ## Development
 
 ```
 git clone https://github.com/khasinski/rubox
 cd rubox
-make test         # run the test suite (26 tests)
-make herb         # build herb as a quick test case
+rake test    # 30 tests: stub, CLI, detector, packaging, cross-distro
+rake herb    # build herb as a quick smoke test
 ```
 
 ## License
