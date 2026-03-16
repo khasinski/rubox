@@ -16,6 +16,7 @@ module Portable
       def package!
         script = File.join(Portable::Ruby.data_dir, "scripts", "package.sh")
         stub = stub_path
+        ensure_write_footer!
 
         args = [
           script,
@@ -105,6 +106,15 @@ module Portable
 
       def stub_source
         File.join(Portable::Ruby.data_dir, "ext", "stub.c")
+      end
+
+      def ensure_write_footer!
+        wf = File.join("build", "write-footer")
+        return if File.exist?(wf)
+
+        Dir.mkdir("build") unless Dir.exist?("build")
+        src = File.join(Portable::Ruby.data_dir, "ext", "write-footer.c")
+        system("cc", "-O2", "-Wall", "-Wextra", "-o", wf, src, exception: true)
       end
     end
   end

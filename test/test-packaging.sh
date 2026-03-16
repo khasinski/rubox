@@ -115,7 +115,7 @@ echo "=== 6. macOS packaging (gem mode) ==="
 # ===================================================================
 
 # Find any available built Ruby
-RUBY_DIR=$(ls -d build/ruby-*-*-darwin 2>/dev/null | head -1)
+RUBY_DIR=$(ls -d build/ruby-*-*-darwin 2>/dev/null | head -1 || true)
 if [[ -n "$RUBY_DIR" && -f "$RUBY_DIR/bin/ruby" ]]; then
     # Ensure herb is installed
     find "$RUBY_DIR/lib/ruby/gems" -maxdepth 3 -type d -name "herb-*" | grep -q . || \
@@ -173,7 +173,7 @@ echo ""
 echo "=== 8. Linux cross-distro ==="
 # ===================================================================
 
-LINUX_RUBY=$(ls -d build/ruby-*-*-linux 2>/dev/null | head -1)
+LINUX_RUBY=$(ls -d build/ruby-*-*-linux 2>/dev/null | head -1 || true)
 if [[ -n "$LINUX_RUBY" && -f "$LINUX_RUBY/bin/ruby" ]] && command -v docker &>/dev/null; then
     find "$LINUX_RUBY/lib/ruby/gems" -maxdepth 3 -type d -name "herb-*" | grep -q . || {
         docker run --rm -v "$(pwd)/$LINUX_RUBY:/opt/ruby" alpine:3.21 \
