@@ -1,0 +1,46 @@
+GEM
+  remote: https://rubygems.org/
+  specs:
+    herb (0.9.0)
+    herb (0.9.0-aarch64-linux-gnu)
+    herb (0.9.0-aarch64-linux-musl)
+    herb (0.9.0-arm-linux-gnu)
+    herb (0.9.0-arm-linux-musl)
+    herb (0.9.0-arm64-darwin)
+    herb (0.9.0-x86-linux-gnu)
+    herb (0.9.0-x86-linux-musl)
+    herb (0.9.0-x86_64-darwin)
+    herb (0.9.0-x86_64-linux-gnu)
+    herb (0.9.0-x86_64-linux-musl)
+
+PLATFORMS
+  aarch64-linux-gnu
+  aarch64-linux-musl
+  arm-linux-gnu
+  arm-linux-musl
+  arm64-darwin
+  ruby
+  x86-linux-gnu
+  x86-linux-musl
+  x86_64-darwin
+  x86_64-linux-gnu
+  x86_64-linux-musl
+
+DEPENDENCIES
+  herb
+
+CHECKSUMS
+  herb (0.9.0) sha256=46f769d381fb27b541295c78b787d7815608caa0d1d194f2031d8a9f80b9a3a6
+  herb (0.9.0-aarch64-linux-gnu) sha256=d9130f8f1549e75874ee2528a3fdf44c44290b90a7caf597e356a03f9318acae
+  herb (0.9.0-aarch64-linux-musl) sha256=57b884f71a4cd9d6ce4451072c1d7e72a5662e4cee8203531e8ac87848d43421
+  herb (0.9.0-arm-linux-gnu) sha256=d153631a1e09a4e0f16aa7cb11f118f690981d5d5d91eab5d363744944d62bad
+  herb (0.9.0-arm-linux-musl) sha256=e0b38e69b5bbf91f7df2fbea5c32458f9ae66ef0259fcf5fabc0f9ee4f11fdf9
+  herb (0.9.0-arm64-darwin) sha256=20b16c3f57ec7f985737659c19f0786eab658014c0247881df07f041452ccd5c
+  herb (0.9.0-x86-linux-gnu) sha256=c85b0e57d13f0a7d67b63731ba209918e89d6fee3caf18ce453a4bcbba894b6d
+  herb (0.9.0-x86-linux-musl) sha256=b7efbc0d04af01994994b772101e5525ba17edc393d9ea4b206c8e37bb6f2ea7
+  herb (0.9.0-x86_64-darwin) sha256=bd4a8dfe6109cf1e0572f798dabfc1aaff74b3db74a0bae64567391f71ef96cc
+  herb (0.9.0-x86_64-linux-gnu) sha256=04b67ed7de5f98acd534ceb85163609716518089152cf9e73e90e7cace58b66a
+  herb (0.9.0-x86_64-linux-musl) sha256=cddc44b8af89359b2a793a878614b1cd182f56cbfbae1e288c3d6f2d7fc31cfa
+
+BUNDLED WITH
+  4.0.8

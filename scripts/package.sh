@@ -117,16 +117,58 @@ if [[ "$MODE" == "gemfile" ]]; then
     cd "$PROJECT_DIR"
 
     echo "    Checking standalone bundle..."
-    if [[ -f "$BUNDLE_DIR/bundler/setup.rb" ]]; then
+    SETUP_RB=$(find "$BUNDLE_DIR" -name "setup.rb" -path "*/bundler/*" | head -1)
+    if [[ -n "$SETUP_RB" ]]; then
         echo "    OK: standalone setup.rb found"
-    else
-        # Standalone setup might be elsewhere
-        SETUP_RB=$(find "$BUNDLE_DIR" -name "setup.rb" -path "*/bundler/*" | head -1)
-        if [[ -n "$SETUP_RB" ]]; then
-            echo "    OK: standalone setup at ${SETUP_RB#${STAGING_DIR}/}"
-        else
-            echo "    WARNING: standalone setup.rb not found, gems may not load correctly"
+        # Rewrite the hardcoded $:.unshift paths to be relative to the bundle dir.
+        # The standalone setup.rb generates paths like:
+        #   $:.unshift File.expand_path("#{__dir__}/../../.../gems/foo/lib")
+        # which resolve to absolute build-time paths. Replace with runtime-relative paths.
+        BUNDLE_GEMS_DIR=$(find "$BUNDLE_DIR" -type d -name "gems" | head -1)
+        if [[ -n "$BUNDLE_GEMS_DIR" ]]; then
+            BUNDLE_GEMS_REL="${BUNDLE_GEMS_DIR#${STAGING_DIR}/}"
+            echo "    Rewriting load paths to use runtime root..."
+
+            # Generate a new setup.rb that uses PORTABLE_CRUBY_ROOT
+            SETUP_HEADER='require "rbconfig"
+module Kernel
+  remove_method(:gem) if private_method_defined?(:gem)
+  def gem(*); end
+  private :gem
+end
+'
+            {
+                echo "$SETUP_HEADER"
+                echo '_root = ENV["PORTABLE_CRUBY_ROOT"]'
+                # Find all gem lib dirs and extension dirs
+                find "$BUNDLE_GEMS_DIR" -maxdepth 2 -name "lib" -type d | while read -r lib_dir; do
+                    rel="${lib_dir#${STAGING_DIR}/}"
+                    echo "\$:.unshift File.join(_root, \"${rel}\")"
+                done
+                # Find native extension dirs
+                find "$BUNDLE_DIR" -name "*.bundle" -o -name "*.so" 2>/dev/null | while read -r ext; do
+                    ext_dir=$(dirname "$ext")
+                    rel="${ext_dir#${STAGING_DIR}/}"
+                    echo "\$:.unshift File.join(_root, \"${rel}\")"
+                done
+            } > "$SETUP_RB"
         fi
+    else
+        echo "    WARNING: standalone setup.rb not found, gems may not load correctly"
+    fi
+
+    # Copy the app's bin/ directory and any source files
+    echo "    Copying application files..."
+    mkdir -p "${STAGING_DIR}/app"
+    if [[ -d "${GEMFILE_DIR}/bin" ]]; then
+        cp -a "${GEMFILE_DIR}/bin" "${STAGING_DIR}/app/bin"
+    fi
+    if [[ -d "${GEMFILE_DIR}/lib" ]]; then
+        cp -a "${GEMFILE_DIR}/lib" "${STAGING_DIR}/app/lib"
+    fi
+    # Copy the entry script itself if it lives outside bin/
+    if [[ -f "${GEMFILE_DIR}/${ENTRY_BIN}" ]]; then
+        cp "${GEMFILE_DIR}/${ENTRY_BIN}" "${STAGING_DIR}/app/"
     fi
 else
     echo "==> Gem '${GEM_NAME}' should already be installed in Ruby dir"
@@ -331,9 +373,23 @@ echo "==> Creating entry script..."
 GEM_VERSION_DIR=$(ls -1 "${STAGING_DIR}/lib/ruby/gems/" 2>/dev/null | head -1)
 
 if [[ "$MODE" == "gemfile" ]]; then
-    # Gemfile mode: use standalone bundle
+    # Gemfile mode: use standalone bundle + app's own scripts
     SETUP_RB_REL=$(find "${STAGING_DIR}/bundle" -name "setup.rb" -path "*/bundler/*" 2>/dev/null | head -1)
     SETUP_RB_REL="${SETUP_RB_REL#${STAGING_DIR}/}"
+
+    # Find the entry script in the app
+    ENTRY_PATH=""
+    for candidate in "app/bin/${ENTRY_BIN}" "app/${ENTRY_BIN}"; do
+        if [[ -f "${STAGING_DIR}/${candidate}" ]]; then
+            ENTRY_PATH="${candidate}"
+            break
+        fi
+    done
+    if [[ -z "$ENTRY_PATH" ]]; then
+        echo "ERROR: entry '${ENTRY_BIN}' not found in app/bin/ or app/"
+        exit 1
+    fi
+    echo "    Entry point: ${ENTRY_PATH}"
 
     cat > "${STAGING_DIR}/entry.rb" << EOF
 # portable-cruby entry (gemfile mode)
@@ -344,11 +400,15 @@ if cleanup_dir = ENV["PORTABLE_CRUBY_CLEANUP"]
   at_exit { require "fileutils"; FileUtils.rm_rf(cleanup_dir) rescue nil }
 end
 
-# Load standalone bundle
+# Load standalone bundle (sets up \$LOAD_PATH for all gems)
 require File.join(root, "${SETUP_RB_REL}")
 
-# Run the entry point
-load File.join(root, "bundle", "bin", "${ENTRY_BIN}")
+# Add app's lib/ to load path
+app_lib = File.join(root, "app", "lib")
+\$LOAD_PATH.unshift(app_lib) if File.directory?(app_lib)
+
+# Run the app's entry script
+load File.join(root, "${ENTRY_PATH}")
 EOF
 else
     # Gem mode: set up load paths manually to avoid rubygems dependency.

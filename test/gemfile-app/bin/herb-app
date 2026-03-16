@@ -1,0 +1,16 @@
+#!/usr/bin/env ruby
+require "herb"
+
+if ARGV.empty? || ARGV.first == "--version"
+  puts "herb-app v1.0 (Herb #{Herb::VERSION})"
+  exit 0
+end
+
+if ARGV.first == "parse"
+  input = ARGV[1] == "-" ? $stdin.read : File.read(ARGV[1])
+  result = Herb.parse(input)
+  puts result.value.inspect
+else
+  $stderr.puts "Usage: herb-app [--version | parse FILE|-]"
+  exit 1
+end
