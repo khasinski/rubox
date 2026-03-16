@@ -27,7 +27,11 @@ $(STUB): src/stub.c
 	@mkdir -p build
 	$(CC) -O2 -Wall -Wextra -o $@ $<
 
-stub: $(STUB) ## Compile the self-extracting stub
+build/write-footer: src/write-footer.c
+	@mkdir -p build
+	$(CC) -O2 -Wall -Wextra -o $@ $<
+
+stub: $(STUB) build/write-footer ## Compile the self-extracting stub and tools
 
 build/stub-linux: src/stub.c ## Cross-compile stub for Linux (via Docker)
 	@echo "==> Cross-compiling stub for Linux..."

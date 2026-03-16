@@ -451,13 +451,12 @@ STUB_SIZE=$(stat -f%z "${OUTPUT}" 2>/dev/null || stat -c%s "${OUTPUT}" 2>/dev/nu
 
 cat "${PAYLOAD_FILE}" >> "${OUTPUT}"
 
-python3 -c "
-import struct, sys
-offset = ${STUB_SIZE}
-size = ${PAYLOAD_SIZE}
-magic = b'CRUBY\x00\x01\x00'
-sys.stdout.buffer.write(struct.pack('<QQ', offset, size) + magic)
-" >> "${OUTPUT}"
+WRITE_FOOTER="${PROJECT_DIR}/build/write-footer"
+if [[ ! -f "$WRITE_FOOTER" ]]; then
+    echo "ERROR: write-footer not found. Run: make stub"
+    exit 1
+fi
+"$WRITE_FOOTER" "${OUTPUT}" "${STUB_SIZE}" "${PAYLOAD_SIZE}"
 
 chmod +x "${OUTPUT}"
 
