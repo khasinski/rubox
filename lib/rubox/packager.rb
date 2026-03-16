@@ -13,6 +13,7 @@ module Rubox
     end
 
     def package!
+      Rubox.validate_data_dir!
       script = File.join(Rubox.data_dir, "scripts", "package.sh")
       stub = stub_path
       ensure_write_footer!

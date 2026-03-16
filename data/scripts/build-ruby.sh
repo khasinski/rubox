@@ -12,10 +12,11 @@
 #
 set -euo pipefail
 
+source "$(dirname "$0")/_common.sh"
+
 RUBY_VERSION="${RUBY_VERSION:-4.0.0}"
 TARGET=""
 OUTPUT_DIR=""
-JOBS=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -43,15 +44,7 @@ if [[ -z "$OUTPUT_DIR" ]]; then
     OUTPUT_DIR="build/ruby-${RUBY_VERSION}-${TARGET}"
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Support both standalone layout and gem layout (RUBOX_DATA_DIR)
-if [[ -n "${RUBOX_DATA_DIR:-}" ]]; then
-    DATA_DIR="$RUBOX_DATA_DIR"
-    PROJECT_DIR="$(pwd)"
-else
-    DATA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-    PROJECT_DIR="$DATA_DIR"
-fi
+# DATA_DIR and PROJECT_DIR set by _common.sh
 
 echo "==> Building Ruby ${RUBY_VERSION} for ${TARGET}"
 echo "    Output: ${OUTPUT_DIR}"

@@ -53,14 +53,7 @@ if [[ -z "$GEM_NAME" && -z "$GEMFILE" ]]; then
     exit 1
 fi
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [[ -n "${RUBOX_DATA_DIR:-}" ]]; then
-    DATA_DIR="$RUBOX_DATA_DIR"
-    PROJECT_DIR="$(pwd)"
-else
-    DATA_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-    PROJECT_DIR="$DATA_DIR"
-fi
+source "$(dirname "$0")/_common.sh"
 RUBY_DIR="$(cd "$RUBY_DIR" && pwd)"
 
 # Defaults

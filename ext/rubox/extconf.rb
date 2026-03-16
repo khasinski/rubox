@@ -8,8 +8,12 @@ src_dir = File.expand_path("../../data/ext", __dir__)
 stub_src = File.join(src_dir, "stub.c")
 footer_src = File.join(src_dir, "write-footer.c")
 
-# The extension dir is where rubygems puts compiled artifacts
-ext_dir = File.expand_path(".")
+[stub_src, footer_src].each do |path|
+  unless File.exist?(path)
+    abort "rubox: C source not found: #{path}\n" \
+          "The gem installation may be corrupt. Try: gem install rubox"
+  end
+end
 
 File.open("Makefile", "w") do |f|
   f.puts <<~MAKEFILE

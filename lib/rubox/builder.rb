@@ -15,6 +15,7 @@ module Rubox
     end
 
     def build!
+      Rubox.validate_data_dir!
       script = File.join(Rubox.data_dir, "scripts", "build-ruby.sh")
 
       env = {
