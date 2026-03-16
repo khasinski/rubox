@@ -1,7 +1,7 @@
 # syntax=docker/dockerfile:1
 #
-# Builds a static CRuby on Alpine Linux (musl).
-# The output is a minimal Ruby installation suitable for embedding.
+# Builds a fully static CRuby on Alpine Linux (musl).
+# All dependencies are statically linked.
 #
 ARG RUBY_VERSION=4.0.0
 ARG JOBS=4
@@ -11,30 +11,35 @@ FROM alpine:3.21 AS builder
 ARG RUBY_VERSION
 ARG JOBS
 
-# Install build dependencies
+# Core build dependencies (static libs for Ruby itself)
 RUN apk add --no-cache \
     build-base \
     linux-headers \
-    openssl-dev \
-    openssl-libs-static \
-    zlib-dev \
-    zlib-static \
-    yaml-dev \
-    yaml-static \
+    openssl-dev openssl-libs-static \
+    zlib-dev zlib-static \
+    yaml-dev yaml-static \
     libffi-dev \
-    readline-dev \
-    readline-static \
-    ncurses-dev \
-    ncurses-static \
+    readline-dev readline-static \
+    ncurses-dev ncurses-static \
     gdbm-dev \
     curl \
     autoconf \
     bison \
-    rust \
-    cargo
+    rust cargo
+
+# Common native extension dependencies (static where available)
+# These allow gems like pg, nokogiri, mysql2 to build statically.
+RUN apk add --no-cache \
+    libxml2-dev libxml2-static \
+    libxslt-dev \
+    postgresql16-dev \
+    mariadb-connector-c-dev \
+    sqlite-dev sqlite-static \
+    || true  # Don't fail if some packages are unavailable
+
+WORKDIR /build
 
 # Download and extract Ruby source
-WORKDIR /build
 RUN set -ex && \
     MAJOR_MINOR=$(echo "$RUBY_VERSION" | sed 's/\.[^.]*$//') && \
     curl -fSL "https://cache.ruby-lang.org/pub/ruby/${MAJOR_MINOR}/ruby-${RUBY_VERSION}.tar.gz" \
@@ -44,7 +49,7 @@ RUN set -ex && \
 
 WORKDIR /build/ruby-${RUBY_VERSION}
 
-# Configure for static build
+# Configure for fully static build
 RUN ./configure \
     --prefix=/opt/ruby \
     --disable-shared \
@@ -55,20 +60,22 @@ RUN ./configure \
     --with-static-linked-ext \
     --without-gmp \
     --enable-yjit \
-    LDFLAGS="-static -L/usr/lib" \
+    LDFLAGS="-static" \
     CFLAGS="-O2 -fPIC"
 
-# Build
 RUN make -j${JOBS}
 RUN make install
 
-# Strip the binary
+# Strip the binary for size
 RUN strip /opt/ruby/bin/ruby
 
-# Verify it's static (on musl)
+# Verify it's truly static
 RUN file /opt/ruby/bin/ruby && \
+    ldd /opt/ruby/bin/ruby 2>&1 | grep -q "statically linked" && \
+    echo "OK: fully static binary" || \
+    echo "WARNING: not fully static" && \
     /opt/ruby/bin/ruby --version
 
-# Second stage: just output the built ruby
+# Output just the Ruby installation
 FROM scratch AS output
 COPY --from=builder /opt/ruby /

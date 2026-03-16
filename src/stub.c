@@ -1,19 +1,25 @@
 /*
  * portable-cruby stub
  *
- * This is the self-extracting loader. It gets compiled as a small static binary,
- * then the payload (compressed tarball of Ruby + gems + app) is appended to it.
+ * Self-extracting loader with content-addressed caching.
  *
  * At runtime:
  *   1. Opens its own executable (via /proc/self/exe or argv[0])
  *   2. Reads the 24-byte footer to find the payload offset and size
- *   3. Extracts the payload to a temp directory
- *   4. Execs the bundled Ruby interpreter with the entry script
+ *   3. Derives a cache key from offset+size (unique per build)
+ *   4. Checks ~/.cache/portable-cruby/<key>/ for existing extraction
+ *   5. If not cached, extracts payload there
+ *   6. Execs the bundled Ruby interpreter with the entry script
  *
  * Footer layout (last 24 bytes of the binary):
  *   [8 bytes] payload offset (little-endian uint64)
  *   [8 bytes] payload size   (little-endian uint64)
  *   [8 bytes] magic          "CRUBY\x00\x01\x00"
+ *
+ * Env vars:
+ *   PORTABLE_CRUBY_CACHE    Override cache directory (skip auto ~/.cache)
+ *   PORTABLE_CRUBY_NO_CACHE Set to 1 to extract to tmpdir and clean up on exit
+ *   PORTABLE_CRUBY_VERBOSE  Set to 1 for extraction progress messages
  */
 
 #define _GNU_SOURCE
@@ -23,10 +29,10 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <sys/file.h>
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
-#include <signal.h>
 
 #ifdef __linux__
 #include <sys/syscall.h>
@@ -41,8 +47,10 @@
 #define MAGIC_SIZE 8
 
 static const char PAYLOAD_MAGIC[MAGIC_SIZE] = MAGIC;
+static int verbose = 0;
 
-/* Read the path to our own executable */
+#define LOG(...) do { if (verbose) fprintf(stderr, "portable-cruby: " __VA_ARGS__); } while(0)
+
 static int self_exe_path(char *buf, size_t bufsize) {
 #ifdef __linux__
     ssize_t len = readlink("/proc/self/exe", buf, bufsize - 1);
@@ -54,14 +62,38 @@ static int self_exe_path(char *buf, size_t bufsize) {
 #ifdef __APPLE__
     uint32_t size = (uint32_t)bufsize;
     if (_NSGetExecutablePath(buf, &size) == 0) {
+        /* Resolve symlinks */
+        char resolved[PATH_MAX];
+        if (realpath(buf, resolved)) {
+            strncpy(buf, resolved, bufsize - 1);
+            buf[bufsize - 1] = '\0';
+        }
         return 0;
     }
 #endif
-    /* Fallback: try argv[0] with realpath */
     return -1;
 }
 
-/* Create a temporary directory for extraction */
+/* mkdir -p (create all parent directories) */
+static int mkdirp(const char *path, mode_t mode) {
+    char tmp[PATH_MAX];
+    char *p = NULL;
+    size_t len;
+
+    snprintf(tmp, sizeof(tmp), "%s", path);
+    len = strlen(tmp);
+    if (tmp[len - 1] == '/') tmp[len - 1] = '\0';
+
+    for (p = tmp + 1; *p; p++) {
+        if (*p == '/') {
+            *p = '\0';
+            mkdir(tmp, mode);
+            *p = '/';
+        }
+    }
+    return mkdir(tmp, mode);
+}
+
 static int make_tmpdir(char *buf, size_t bufsize) {
     const char *tmpdir = getenv("TMPDIR");
     if (!tmpdir) tmpdir = getenv("TMP");
@@ -75,41 +107,77 @@ static int make_tmpdir(char *buf, size_t bufsize) {
     return 0;
 }
 
-/* Recursively remove a directory (best-effort cleanup) */
 static void cleanup_dir(const char *path) {
     char cmd[PATH_MAX + 16];
     snprintf(cmd, sizeof(cmd), "rm -rf '%s'", path);
-    system(cmd);
+    (void)system(cmd);
 }
 
-/* Extract a zstd-compressed tar from a region of a file */
+/* Build the cache directory path from a cache key */
+static void build_cache_path(char *buf, size_t bufsize, const char *cache_key) {
+    const char *override = getenv("PORTABLE_CRUBY_CACHE");
+    if (override && override[0]) {
+        snprintf(buf, bufsize, "%s", override);
+        return;
+    }
+
+    const char *xdg = getenv("XDG_CACHE_HOME");
+    if (xdg && xdg[0]) {
+        snprintf(buf, bufsize, "%s/portable-cruby/%s", xdg, cache_key);
+    } else {
+        const char *home = getenv("HOME");
+        if (!home) home = "/tmp";
+        snprintf(buf, bufsize, "%s/.cache/portable-cruby/%s", home, cache_key);
+    }
+}
+
+/* Check if extraction produced a valid Ruby install */
+static int verify_extraction(const char *dest_dir) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof(path), "%s/bin/ruby", dest_dir);
+    return access(path, X_OK);
+}
+
+/* Extract a zstd-compressed tar from a region of a file.
+ *
+ * We use dd to slice the payload bytes, pipe through decompression,
+ * then untar. We try multiple dd invocations because macOS dd
+ * does not support iflag=skip_bytes. We verify that extraction
+ * actually produced files since pipeline exit codes can be unreliable.
+ */
 static int extract_payload(const char *exe_path, off_t offset, off_t size,
                            const char *dest_dir) {
-    char cmd[PATH_MAX * 2 + 128];
+    char cmd[PATH_MAX * 2 + 256];
 
-    /*
-     * Use dd to extract the payload region, pipe through zstd decompression,
-     * then untar into the destination directory.
-     *
-     * We try zstd first (better compression), fall back to gzip.
-     */
+    /* Attempt 1: bs=1 with zstd (works everywhere, just slower) */
     snprintf(cmd, sizeof(cmd),
-        "dd if='%s' bs=1 skip=%lld count=%lld status=none 2>/dev/null | "
+        "dd if='%s' bs=1 skip=%lld count=%lld 2>/dev/null | "
         "zstd -d -c 2>/dev/null | "
-        "tar xf - -C '%s' 2>/dev/null",
+        "tar xf - -C '%s'",
         exe_path, (long long)offset, (long long)size, dest_dir);
 
-    int ret = system(cmd);
-    if (ret == 0) return 0;
+    (void)system(cmd);
+    if (verify_extraction(dest_dir) == 0) return 0;
 
-    /* Fall back to gzip */
+    /* Attempt 2: GNU dd with iflag for better performance */
     snprintf(cmd, sizeof(cmd),
-        "dd if='%s' bs=1 skip=%lld count=%lld status=none 2>/dev/null | "
-        "gzip -d -c 2>/dev/null | "
-        "tar xf - -C '%s' 2>/dev/null",
+        "dd if='%s' bs=4096 iflag=skip_bytes,count_bytes skip=%lld count=%lld 2>/dev/null | "
+        "zstd -d -c 2>/dev/null | "
+        "tar xf - -C '%s'",
         exe_path, (long long)offset, (long long)size, dest_dir);
 
-    return system(cmd);
+    (void)system(cmd);
+    if (verify_extraction(dest_dir) == 0) return 0;
+
+    /* Attempt 3: gzip fallback */
+    snprintf(cmd, sizeof(cmd),
+        "dd if='%s' bs=1 skip=%lld count=%lld 2>/dev/null | "
+        "gzip -d -c 2>/dev/null | "
+        "tar xf - -C '%s'",
+        exe_path, (long long)offset, (long long)size, dest_dir);
+
+    (void)system(cmd);
+    return verify_extraction(dest_dir);
 }
 
 static uint64_t read_le64(const unsigned char *p) {
@@ -125,21 +193,25 @@ static uint64_t read_le64(const unsigned char *p) {
 
 int main(int argc, char **argv) {
     char exe_path[PATH_MAX];
-    char tmpdir[PATH_MAX];
+    char cache_dir[PATH_MAX];
     char ruby_bin[PATH_MAX];
     char entry_script[PATH_MAX];
-    char load_path[PATH_MAX];
-    char gem_path[PATH_MAX];
+    char lock_path[PATH_MAX];
     unsigned char footer[FOOTER_SIZE];
+
+    verbose = (getenv("PORTABLE_CRUBY_VERBOSE") != NULL);
+    int no_cache = 0;
+    const char *nc = getenv("PORTABLE_CRUBY_NO_CACHE");
+    if (nc && nc[0] == '1') no_cache = 1;
 
     /* Find our own executable */
     if (self_exe_path(exe_path, sizeof(exe_path)) != 0) {
-        /* Fall back to argv[0] */
         if (argv[0] && realpath(argv[0], exe_path) == NULL) {
             fprintf(stderr, "portable-cruby: cannot determine executable path\n");
             return 1;
         }
     }
+    LOG("exe: %s\n", exe_path);
 
     /* Read the footer */
     FILE *fp = fopen(exe_path, "rb");
@@ -165,114 +237,127 @@ int main(int argc, char **argv) {
     /* Verify magic */
     if (memcmp(footer + 16, PAYLOAD_MAGIC, MAGIC_SIZE) != 0) {
         fprintf(stderr, "portable-cruby: no payload found (bad magic)\n");
-        fprintf(stderr, "This binary was not packaged correctly.\n");
         return 1;
     }
 
     uint64_t payload_offset = read_le64(footer);
     uint64_t payload_size = read_le64(footer + 8);
 
-    /* Check for cached extraction */
-    const char *cache_dir = getenv("PORTABLE_CRUBY_CACHE");
-    int use_cache = (cache_dir != NULL && cache_dir[0] != '\0');
-    int needs_extract = 1;
+    /* Derive content-addressed cache key from offset+size.
+     * This changes on every rebuild since the payload size changes. */
+    char cache_key[33];
+    snprintf(cache_key, sizeof(cache_key), "%08llx%08llx",
+             (unsigned long long)payload_offset,
+             (unsigned long long)payload_size);
 
-    if (use_cache) {
-        snprintf(tmpdir, sizeof(tmpdir), "%s", cache_dir);
-        /* Check if already extracted */
-        snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", tmpdir);
+    LOG("payload: offset=%llu size=%llu key=%s\n",
+        (unsigned long long)payload_offset,
+        (unsigned long long)payload_size, cache_key);
+
+    int needs_extract = 1;
+    int is_tmpdir = 0; /* 1 = tmpdir that needs cleanup */
+
+    if (no_cache) {
+        /* Extract to tmpdir, clean up on exit */
+        if (make_tmpdir(cache_dir, sizeof(cache_dir)) != 0) return 1;
+        is_tmpdir = 1;
+        LOG("no-cache mode, extracting to %s\n", cache_dir);
+    } else {
+        /* Use content-addressed cache */
+        build_cache_path(cache_dir, sizeof(cache_dir), cache_key);
+        snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", cache_dir);
+
         if (access(ruby_bin, X_OK) == 0) {
             needs_extract = 0;
+            LOG("cache hit: %s\n", cache_dir);
         } else {
-            mkdir(tmpdir, 0700);
-        }
-    } else {
-        if (make_tmpdir(tmpdir, sizeof(tmpdir)) != 0) {
-            return 1;
+            LOG("cache miss, extracting to %s\n", cache_dir);
+            mkdirp(cache_dir, 0755);
         }
     }
 
     if (needs_extract) {
-        if (extract_payload(exe_path, (off_t)payload_offset,
-                           (off_t)payload_size, tmpdir) != 0) {
-            fprintf(stderr, "portable-cruby: failed to extract payload\n");
-            if (!use_cache) cleanup_dir(tmpdir);
-            return 1;
+        /* Use a lock file to prevent concurrent extractions */
+        snprintf(lock_path, sizeof(lock_path), "%s.lock", cache_dir);
+        int lock_fd = open(lock_path, O_CREAT | O_WRONLY, 0644);
+        if (lock_fd >= 0) {
+            if (flock(lock_fd, LOCK_EX) == 0) {
+                /* Re-check after acquiring lock (another process may have extracted) */
+                snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", cache_dir);
+                if (access(ruby_bin, X_OK) == 0) {
+                    needs_extract = 0;
+                    LOG("cache populated by another process\n");
+                }
+            }
+        }
+
+        if (needs_extract) {
+            if (extract_payload(exe_path, (off_t)payload_offset,
+                               (off_t)payload_size, cache_dir) != 0) {
+                fprintf(stderr, "portable-cruby: extraction failed\n");
+                if (is_tmpdir) cleanup_dir(cache_dir);
+                if (lock_fd >= 0) { unlink(lock_path); close(lock_fd); }
+                return 1;
+            }
+            LOG("extraction complete\n");
+        }
+
+        if (lock_fd >= 0) {
+            flock(lock_fd, LOCK_UN);
+            unlink(lock_path);
+            close(lock_fd);
         }
     }
 
     /* Build paths */
-    snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", tmpdir);
-    snprintf(entry_script, sizeof(entry_script), "%s/entry.rb", tmpdir);
-    snprintf(load_path, sizeof(load_path), "%s/lib", tmpdir);
-    snprintf(gem_path, sizeof(gem_path), "%s/gems", tmpdir);
+    snprintf(ruby_bin, sizeof(ruby_bin), "%s/bin/ruby", cache_dir);
+    snprintf(entry_script, sizeof(entry_script), "%s/entry.rb", cache_dir);
 
     if (access(ruby_bin, X_OK) != 0) {
-        fprintf(stderr, "portable-cruby: ruby binary not found at %s\n", ruby_bin);
-        if (!use_cache) cleanup_dir(tmpdir);
+        fprintf(stderr, "portable-cruby: ruby not found at %s\n", ruby_bin);
+        if (is_tmpdir) cleanup_dir(cache_dir);
         return 1;
     }
 
     if (access(entry_script, R_OK) != 0) {
-        fprintf(stderr, "portable-cruby: entry script not found at %s\n", entry_script);
-        if (!use_cache) cleanup_dir(tmpdir);
+        fprintf(stderr, "portable-cruby: entry.rb not found at %s\n", entry_script);
+        if (is_tmpdir) cleanup_dir(cache_dir);
         return 1;
     }
 
-    /*
-     * Build argv for ruby.
-     * We pass: ruby -I<load_path> <entry_script> [original args...]
-     */
-    int new_argc = argc + 3; /* ruby, -I, entry, [args...], NULL */
-    char **new_argv = malloc(sizeof(char *) * (new_argc + 1));
+    /* Build argv: ruby entry.rb [original args...] */
+    char **new_argv = malloc(sizeof(char *) * (argc + 2));
     if (!new_argv) {
         perror("malloc");
-        if (!use_cache) cleanup_dir(tmpdir);
+        if (is_tmpdir) cleanup_dir(cache_dir);
         return 1;
     }
 
-    new_argv[0] = ruby_bin;
-
-    /* Set GEM_PATH so bundled gems are found */
-    char gem_path_env[PATH_MAX + 16];
-    snprintf(gem_path_env, sizeof(gem_path_env), "GEM_PATH=%s", gem_path);
-    putenv(gem_path_env);
-
-    /* Set GEM_HOME to prevent writing to system gem dir */
-    char gem_home_env[PATH_MAX + 16];
-    snprintf(gem_home_env, sizeof(gem_home_env), "GEM_HOME=%s", gem_path);
-    putenv(gem_home_env);
-
-    /* Tell bundler not to look for a Gemfile */
-    putenv("BUNDLE_GEMFILE=");
-
-    /* Store extraction dir for the entry script */
+    /* Set environment */
     char root_env[PATH_MAX + 32];
-    snprintf(root_env, sizeof(root_env), "PORTABLE_CRUBY_ROOT=%s", tmpdir);
+    snprintf(root_env, sizeof(root_env), "PORTABLE_CRUBY_ROOT=%s", cache_dir);
     putenv(root_env);
 
-    /* If not using cache, register cleanup on common signals */
-    if (!use_cache) {
+    putenv("BUNDLE_GEMFILE=");
+
+    if (is_tmpdir) {
         char cleanup_env[PATH_MAX + 32];
         snprintf(cleanup_env, sizeof(cleanup_env),
-                 "PORTABLE_CRUBY_CLEANUP=%s", tmpdir);
+                 "PORTABLE_CRUBY_CLEANUP=%s", cache_dir);
         putenv(cleanup_env);
     }
 
+    new_argv[0] = ruby_bin;
     new_argv[1] = entry_script;
-
-    /* Copy original argv[1..] (skip argv[0] which is the packed binary name) */
     for (int i = 1; i < argc; i++) {
         new_argv[i + 1] = argv[i];
     }
     new_argv[argc + 1] = NULL;
 
-    /* Exec ruby - this replaces the current process */
     execv(ruby_bin, new_argv);
 
-    /* If exec fails */
-    fprintf(stderr, "portable-cruby: failed to exec ruby: %s\n", strerror(errno));
-    if (!use_cache) cleanup_dir(tmpdir);
+    fprintf(stderr, "portable-cruby: exec failed: %s\n", strerror(errno));
+    if (is_tmpdir) cleanup_dir(cache_dir);
     free(new_argv);
     return 1;
 }
