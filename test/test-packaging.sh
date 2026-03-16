@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Integration test suite for rubox.
-# Run: make test
+# Run: rake test
 #
 set -euo pipefail
 
@@ -31,7 +31,9 @@ assert_contains() {
 echo "=== 1. Native tools ==="
 # ===================================================================
 
-make stub >/dev/null 2>&1
+mkdir -p build
+cc -O2 -o build/stub data/ext/stub.c 2>/dev/null
+cc -O2 -o build/write-footer data/ext/write-footer.c 2>/dev/null
 [[ -x build/stub ]] && pass "stub compiles" || fail "stub compiles" "binary not found"
 [[ -x build/write-footer ]] && pass "write-footer compiles" || fail "write-footer compiles" "binary not found"
 
@@ -180,7 +182,9 @@ if [[ -n "$LINUX_RUBY" && -f "$LINUX_RUBY/bin/ruby" ]] && command -v docker &>/d
             sh -c "apk add --no-cache build-base libgcc >/dev/null 2>&1 && /opt/ruby/bin/gem install herb --no-document" >/dev/null 2>&1
     }
 
-    make build/stub-linux >/dev/null 2>&1
+    [[ -f build/stub-linux ]] || \
+        docker run --rm -v "$(pwd):/src" -w /src alpine:3.21 \
+            sh -c "apk add --no-cache gcc musl-dev >/dev/null 2>&1 && cc -O2 -Wall -Wextra -static -o build/stub-linux data/ext/stub.c" >/dev/null 2>&1
 
     rm -rf ~/.cache/rubox/
     RUBOX_DATA_DIR="$PROJECT_DIR/data" \
