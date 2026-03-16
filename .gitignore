@@ -1,6 +1,7 @@
 build/
 vendor/
-packaging/
 *.gem
 Gemfile.lock
 tmp/
+.bundle/
+.DS_Store
