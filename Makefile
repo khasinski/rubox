@@ -100,42 +100,8 @@ herb-linux: stub-linux ruby-linux ## Package herb for Linux
 
 # ---- Tests ----
 
-test: herb ## Test the packaged herb binary
-	@echo "==> Testing packaged herb binary..."
-	@echo ""
-	@echo "--- version ---"
-	@build/herb --version
-	@echo ""
-	@echo "--- parse ---"
-	@echo '<div><%= "hello" %></div>' | build/herb parse -
-	@echo ""
-	@echo "--- lex ---"
-	@echo '<a href="#">link</a>' | build/herb lex - | head -5
-	@echo "..."
-	@echo ""
-	@echo "==> All tests passed."
-
-test-cache: herb ## Test caching behavior
-	@echo "==> Testing cache..."
-	@rm -rf ~/.cache/portable-cruby/
-	@echo "--- First run (cold cache) ---"
-	@time build/herb --version
-	@echo ""
-	@echo "--- Second run (warm cache) ---"
-	@time build/herb --version
-	@echo ""
-	@echo "--- Cache contents ---"
-	@ls ~/.cache/portable-cruby/ 2>/dev/null || echo "(no cache dir)"
-	@echo ""
-	@echo "--- No-cache mode ---"
-	@PORTABLE_CRUBY_NO_CACHE=1 build/herb --version
-	@echo ""
-	@echo "==> Cache tests passed."
-
-test-linux: herb-linux ## Test Linux binary in Docker
-	@echo "==> Testing Linux binary in Docker..."
-	docker run --rm -v $(PWD)/build:/app alpine:3.21 \
-		sh -c "apk add --no-cache zstd >/dev/null 2>&1 && /app/herb-linux --version"
+test: ## Run automated test suite
+	@./test/test-packaging.sh
 
 # ---- Clean ----
 
